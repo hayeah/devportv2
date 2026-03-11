@@ -1,28 +1,19 @@
 package main
 
-import "testing"
+import (
+	"io"
+	"testing"
 
-func TestCommandConstructorsAndSingleKey(t *testing.T) {
-	options := &rootOptions{}
-	commands := []*struct {
-		name string
-		cmd  func(*rootOptions) any
-	}{
-		{name: "up", cmd: func(options *rootOptions) any { return newUpCommand(options) }},
-		{name: "down", cmd: func(options *rootOptions) any { return newDownCommand(options) }},
-		{name: "start", cmd: func(options *rootOptions) any { return newStartCommand(options) }},
-		{name: "stop", cmd: func(options *rootOptions) any { return newStopCommand(options) }},
-		{name: "restart", cmd: func(options *rootOptions) any { return newRestartCommand(options) }},
-		{name: "status", cmd: func(options *rootOptions) any { return newStatusCommand(options) }},
-		{name: "logs", cmd: func(options *rootOptions) any { return newLogsCommand(options) }},
-		{name: "freeport", cmd: func(options *rootOptions) any { return newFreePortCommand(options) }},
-		{name: "ingress", cmd: func(options *rootOptions) any { return newIngressCommand(options) }},
-		{name: "supervise", cmd: func(options *rootOptions) any { return newSuperviseCommand(options) }},
+	devport "github.com/hayeah/devportv2"
+)
+
+func TestInitializeAppAndSingleKey(t *testing.T) {
+	app := InitializeApp(devport.ManagerIO{Stdout: io.Discard, Stderr: io.Discard})
+	if app == nil {
+		t.Fatalf("expected app")
 	}
-	for _, command := range commands {
-		if command.cmd(options) == nil {
-			t.Fatalf("%s constructor returned nil", command.name)
-		}
+	if app.RootCommand() == nil {
+		t.Fatalf("expected root command")
 	}
 
 	if _, err := singleKey(nil); err == nil {

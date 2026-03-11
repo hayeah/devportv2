@@ -24,8 +24,11 @@ func TestEndToEndUpAfterConfigMutation(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is required")
 	}
+	t.Parallel()
 
 	t.Run("message_changes_and_revert_stay_coherent", func(t *testing.T) {
+		t.Parallel()
+
 		h := newHarness(t)
 		t.Cleanup(func() {
 			_, _, _ = h.runDetailed("down", "--file", h.configPath)
@@ -87,6 +90,8 @@ func TestEndToEndUpAfterConfigMutation(t *testing.T) {
 	})
 
 	t.Run("port_changes_and_revert_stay_coherent", func(t *testing.T) {
+		t.Parallel()
+
 		h := newHarness(t)
 		t.Cleanup(func() {
 			_, _, _ = h.runDetailed("down", "--file", h.configPath)
@@ -155,6 +160,8 @@ func TestEndToEndUpAfterConfigMutation(t *testing.T) {
 	})
 
 	t.Run("adding_service_via_up_preserves_existing_runtime", func(t *testing.T) {
+		t.Parallel()
+
 		h := newHarness(t)
 		t.Cleanup(func() {
 			_, _, _ = h.runDetailed("down", "--file", h.configPath)

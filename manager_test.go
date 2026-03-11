@@ -11,6 +11,8 @@ import (
 )
 
 func TestManagerHelpers(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	if err := os.MkdirAll(filepath.Join(home, ".config", "devport"), 0o755); err != nil {
@@ -48,12 +50,13 @@ hostname = "web.example.test"
 		t.Fatalf("write config: %v", err)
 	}
 
-	t.Setenv("HOME", home)
-	t.Setenv("DEVPORT_STATE_DIR", filepath.Join(dir, "state"))
-
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	manager, err := NewManager("", &stdout, &stderr)
+	manager, err := NewManagerWithRuntime(RuntimeConfig{
+		HomeDir:    home,
+		StateDir:   filepath.Join(dir, "state"),
+		ConfigPath: configPath,
+	}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -96,6 +99,8 @@ hostname = "web.example.test"
 }
 
 func TestManagerWaitForStartFailsOnStaleStartingRecord(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	if err := os.MkdirAll(filepath.Join(home, ".config", "devport"), 0o755); err != nil {
@@ -121,10 +126,11 @@ type = "none"
 		t.Fatalf("write config: %v", err)
 	}
 
-	t.Setenv("HOME", home)
-	t.Setenv("DEVPORT_STATE_DIR", filepath.Join(dir, "state"))
-
-	manager, err := NewManager(configPath, &bytes.Buffer{}, &bytes.Buffer{})
+	manager, err := NewManagerWithRuntime(RuntimeConfig{
+		HomeDir:    home,
+		StateDir:   filepath.Join(dir, "state"),
+		ConfigPath: configPath,
+	}, &bytes.Buffer{}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}

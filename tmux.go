@@ -4,7 +4,6 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 )
@@ -26,11 +25,11 @@ func (t *Tmux) Target(window string) string {
 	return t.session + ":" + window
 }
 
-func (t *Tmux) Start(window string, command []string) error {
+func (t *Tmux) Start(window string, env map[string]string, command []string) error {
 	if len(command) == 0 {
 		return fmt.Errorf("tmux command is empty")
 	}
-	envArgs := tmuxEnvironmentArgs()
+	envArgs := tmuxEnvironmentArgs(env)
 	if t.SessionExists() {
 		if t.WindowExists(window) {
 			if err := t.KillWindow(window); err != nil {
@@ -96,11 +95,11 @@ func (t *Tmux) windowNames() string {
 	return "\n" + string(output) + "\n"
 }
 
-func tmuxEnvironmentArgs() []string {
-	keys := []string{"HOME", "PATH", "LOG_LEVEL", "DEVPORT_STATE_DIR", "DEVPORT_CONFIG"}
+func tmuxEnvironmentArgs(env map[string]string) []string {
+	keys := []string{"HOME", "PATH", "LOG_LEVEL"}
 	args := []string{}
 	for _, key := range keys {
-		value, ok := os.LookupEnv(key)
+		value, ok := env[key]
 		if !ok {
 			continue
 		}

@@ -4,18 +4,41 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
+	"strings"
 
 	devport "github.com/hayeah/devportv2"
 	"github.com/spf13/cobra"
 )
 
 type rootOptions struct {
-	configPath string
-	keys       []string
+	configPath  string
+	runtimeJSON string
+	keys        []string
 }
 
-func Execute() {
+type ManagerFactory struct {
+	managerIO devport.ManagerIO
+}
+
+type App struct {
+	managerFactory *ManagerFactory
+	managerIO      devport.ManagerIO
+}
+
+func NewManagerFactory(managerIO devport.ManagerIO) *ManagerFactory {
+	return &ManagerFactory{managerIO: managerIO}
+}
+
+func NewApp(managerFactory *ManagerFactory, managerIO devport.ManagerIO) *App {
+	return &App{managerFactory: managerFactory, managerIO: managerIO}
+}
+
+func Execute(managerIO devport.ManagerIO) error {
+	app := InitializeApp(managerIO)
+	return app.RootCommand().Execute()
+}
+
+func (a *App) RootCommand() *cobra.Command {
 	options := &rootOptions{}
 	root := &cobra.Command{
 		Use:           "devport",
@@ -24,30 +47,28 @@ func Execute() {
 	}
 
 	root.PersistentFlags().StringVar(&options.configPath, "file", "", "path to devport.toml")
+	root.PersistentFlags().StringVar(&options.runtimeJSON, "runtime-json", "", "internal runtime overrides")
+	_ = root.PersistentFlags().MarkHidden("runtime-json")
 
-	root.AddCommand(newUpCommand(options))
-	root.AddCommand(newDownCommand(options))
-	root.AddCommand(newStartCommand(options))
-	root.AddCommand(newStopCommand(options))
-	root.AddCommand(newRestartCommand(options))
-	root.AddCommand(newStatusCommand(options))
-	root.AddCommand(newLogsCommand(options))
-	root.AddCommand(newFreePortCommand(options))
-	root.AddCommand(newIngressCommand(options))
-	root.AddCommand(newSuperviseCommand(options))
-
-	if err := root.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
+	root.AddCommand(a.newUpCommand(options))
+	root.AddCommand(a.newDownCommand(options))
+	root.AddCommand(a.newStartCommand(options))
+	root.AddCommand(a.newStopCommand(options))
+	root.AddCommand(a.newRestartCommand(options))
+	root.AddCommand(a.newStatusCommand(options))
+	root.AddCommand(a.newLogsCommand(options))
+	root.AddCommand(a.newFreePortCommand(options))
+	root.AddCommand(a.newIngressCommand(options))
+	root.AddCommand(a.newSuperviseCommand(options))
+	return root
 }
 
-func newUpCommand(options *rootOptions) *cobra.Command {
+func (a *App) newUpCommand(options *rootOptions) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "up",
 		Short: "Start services from the spec",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			manager, err := devport.NewManager(options.configPath, os.Stdout, os.Stderr)
+			manager, err := a.manager(options)
 			if err != nil {
 				return err
 			}
@@ -59,12 +80,12 @@ func newUpCommand(options *rootOptions) *cobra.Command {
 	return command
 }
 
-func newDownCommand(options *rootOptions) *cobra.Command {
+func (a *App) newDownCommand(options *rootOptions) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "down",
 		Short: "Stop services from the spec",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			manager, err := devport.NewManager(options.configPath, os.Stdout, os.Stderr)
+			manager, err := a.manager(options)
 			if err != nil {
 				return err
 			}
@@ -76,7 +97,7 @@ func newDownCommand(options *rootOptions) *cobra.Command {
 	return command
 }
 
-func newStartCommand(options *rootOptions) *cobra.Command {
+func (a *App) newStartCommand(options *rootOptions) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "start",
 		Short: "Start one service",
@@ -85,7 +106,7 @@ func newStartCommand(options *rootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			manager, err := devport.NewManager(options.configPath, os.Stdout, os.Stderr)
+			manager, err := a.manager(options)
 			if err != nil {
 				return err
 			}
@@ -97,7 +118,7 @@ func newStartCommand(options *rootOptions) *cobra.Command {
 	return command
 }
 
-func newStopCommand(options *rootOptions) *cobra.Command {
+func (a *App) newStopCommand(options *rootOptions) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "stop",
 		Short: "Stop one service",
@@ -106,7 +127,7 @@ func newStopCommand(options *rootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			manager, err := devport.NewManager(options.configPath, os.Stdout, os.Stderr)
+			manager, err := a.manager(options)
 			if err != nil {
 				return err
 			}
@@ -118,7 +139,7 @@ func newStopCommand(options *rootOptions) *cobra.Command {
 	return command
 }
 
-func newRestartCommand(options *rootOptions) *cobra.Command {
+func (a *App) newRestartCommand(options *rootOptions) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "restart",
 		Short: "Restart one service",
@@ -127,7 +148,7 @@ func newRestartCommand(options *rootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			manager, err := devport.NewManager(options.configPath, os.Stdout, os.Stderr)
+			manager, err := a.manager(options)
 			if err != nil {
 				return err
 			}
@@ -139,14 +160,14 @@ func newRestartCommand(options *rootOptions) *cobra.Command {
 	return command
 }
 
-func newStatusCommand(options *rootOptions) *cobra.Command {
+func (a *App) newStatusCommand(options *rootOptions) *cobra.Command {
 	var jsonOutput bool
 	var diffOnly bool
 	command := &cobra.Command{
 		Use:   "status",
 		Short: "Report service status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			manager, err := devport.NewManager(options.configPath, os.Stdout, os.Stderr)
+			manager, err := a.manager(options)
 			if err != nil {
 				return err
 			}
@@ -156,7 +177,7 @@ func newStatusCommand(options *rootOptions) *cobra.Command {
 				return err
 			}
 			if jsonOutput {
-				encoder := json.NewEncoder(os.Stdout)
+				encoder := json.NewEncoder(a.managerIO.Stdout)
 				encoder.SetIndent("", "  ")
 				return encoder.Encode(statuses)
 			}
@@ -169,7 +190,7 @@ func newStatusCommand(options *rootOptions) *cobra.Command {
 	return command
 }
 
-func newLogsCommand(options *rootOptions) *cobra.Command {
+func (a *App) newLogsCommand(options *rootOptions) *cobra.Command {
 	var lines int
 	command := &cobra.Command{
 		Use:   "logs",
@@ -179,7 +200,7 @@ func newLogsCommand(options *rootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			manager, err := devport.NewManager(options.configPath, os.Stdout, os.Stderr)
+			manager, err := a.manager(options)
 			if err != nil {
 				return err
 			}
@@ -188,8 +209,8 @@ func newLogsCommand(options *rootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprint(os.Stdout, output)
-			return nil
+			_, err = fmt.Fprint(a.managerIO.Stdout, output)
+			return err
 		},
 	}
 	command.Flags().StringArrayVar(&options.keys, "key", nil, "service key")
@@ -197,12 +218,12 @@ func newLogsCommand(options *rootOptions) *cobra.Command {
 	return command
 }
 
-func newFreePortCommand(options *rootOptions) *cobra.Command {
+func (a *App) newFreePortCommand(options *rootOptions) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "freeport",
 		Short: "Return the next free port in the configured range",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			manager, err := devport.NewManager(options.configPath, os.Stdout, os.Stderr)
+			manager, err := a.manager(options)
 			if err != nil {
 				return err
 			}
@@ -211,20 +232,20 @@ func newFreePortCommand(options *rootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(os.Stdout, port)
-			return nil
+			_, err = fmt.Fprintln(a.managerIO.Stdout, port)
+			return err
 		},
 	}
 	command.Flags().StringArrayVar(&options.keys, "key", nil, "service key")
 	return command
 }
 
-func newIngressCommand(options *rootOptions) *cobra.Command {
+func (a *App) newIngressCommand(options *rootOptions) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "ingress",
 		Short: "Export public hostnames as ingress JSON",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			manager, err := devport.NewManager(options.configPath, os.Stdout, os.Stderr)
+			manager, err := a.manager(options)
 			if err != nil {
 				return err
 			}
@@ -233,15 +254,15 @@ func newIngressCommand(options *rootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(os.Stdout, string(document))
-			return nil
+			_, err = fmt.Fprintln(a.managerIO.Stdout, string(document))
+			return err
 		},
 	}
 	command.Flags().StringArrayVar(&options.keys, "key", nil, "service key")
 	return command
 }
 
-func newSuperviseCommand(options *rootOptions) *cobra.Command {
+func (a *App) newSuperviseCommand(options *rootOptions) *cobra.Command {
 	command := &cobra.Command{
 		Use:    "supervise",
 		Hidden: true,
@@ -250,7 +271,7 @@ func newSuperviseCommand(options *rootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			manager, err := devport.NewManager(options.configPath, os.Stdout, os.Stderr)
+			manager, err := a.manager(options)
 			if err != nil {
 				return err
 			}
@@ -267,4 +288,29 @@ func singleKey(keys []string) (string, error) {
 		return "", fmt.Errorf("exactly one --key is required")
 	}
 	return keys[0], nil
+}
+
+func (a *App) manager(options *rootOptions) (*devport.Manager, error) {
+	runtime, err := options.runtime()
+	if err != nil {
+		return nil, err
+	}
+	return a.managerFactory.Manager(runtime)
+}
+
+func (factory *ManagerFactory) Manager(runtime devport.RuntimeConfig) (*devport.Manager, error) {
+	return devport.InitializeManager(runtime, factory.managerIO)
+}
+
+func (options *rootOptions) runtime() (devport.RuntimeConfig, error) {
+	runtime := devport.RuntimeConfig{}
+	if strings.TrimSpace(options.runtimeJSON) != "" {
+		if err := json.Unmarshal([]byte(options.runtimeJSON), &runtime); err != nil {
+			return devport.RuntimeConfig{}, fmt.Errorf("parse runtime-json: %w", err)
+		}
+	}
+	if options.configPath != "" {
+		runtime.ConfigPath = options.configPath
+	}
+	return runtime, nil
 }

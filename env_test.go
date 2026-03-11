@@ -8,9 +8,9 @@ import (
 )
 
 func TestLoadEnvironmentAndExpansion(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("FROM_ENV", "ambient")
 
 	envFile := filepath.Join(dir, ".env.test")
 	if err := os.WriteFile(envFile, []byte("FROM_FILE=file\nOVERRIDE=from-file\n"), 0o644); err != nil {
@@ -22,7 +22,12 @@ func TestLoadEnvironmentAndExpansion(t *testing.T) {
 		PortEnv:  "VITE_PORT",
 		EnvFiles: []string{"~/.env.test"},
 	}
-	env, err := LoadEnvironment(service)
+	env, err := LoadEnvironmentWithRuntime(service, RuntimeConfig{
+		HomeDir: dir,
+		Env: map[string]string{
+			"FROM_ENV": "ambient",
+		},
+	})
 	if err != nil {
 		t.Fatalf("LoadEnvironment: %v", err)
 	}
@@ -61,6 +66,8 @@ func TestLoadEnvironmentAndExpansion(t *testing.T) {
 }
 
 func TestLoadEnvironmentDefaultPort(t *testing.T) {
+	t.Parallel()
+
 	service := ServiceSpec{
 		Port: 19200,
 	}
@@ -74,6 +81,8 @@ func TestLoadEnvironmentDefaultPort(t *testing.T) {
 }
 
 func TestLoadEnvironmentMultiPortEnv(t *testing.T) {
+	t.Parallel()
+
 	service := ServiceSpec{
 		Port:    19300,
 		PortEnv: "VITE_PORT:PORT",

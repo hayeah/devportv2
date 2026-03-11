@@ -6,12 +6,15 @@ import (
 )
 
 func TestResolvePathsHonorsEnv(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("DEVPORT_CONFIG", "~/custom/devport.toml")
-	t.Setenv("DEVPORT_STATE_DIR", "~/state/devport")
+	t.Parallel()
 
-	paths, err := ResolvePaths("")
+	dir := t.TempDir()
+
+	paths, err := ResolvePathsWithRuntime(RuntimeConfig{
+		HomeDir:    dir,
+		ConfigPath: "~/custom/devport.toml",
+		StateDir:   "~/state/devport",
+	})
 	if err != nil {
 		t.Fatalf("ResolvePaths: %v", err)
 	}
@@ -27,6 +30,8 @@ func TestResolvePathsHonorsEnv(t *testing.T) {
 }
 
 func TestExpandPathRejectsEmpty(t *testing.T) {
+	t.Parallel()
+
 	if _, err := ExpandPath(""); err == nil {
 		t.Fatalf("expected error for empty path")
 	}

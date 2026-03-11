@@ -7,6 +7,8 @@ import (
 )
 
 func TestLoadConfigAndIngressRules(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "devport.toml")
 	configText := `
@@ -97,6 +99,8 @@ type = "process"
 }
 
 func TestLoadConfigValidationErrors(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "bad.toml")
 

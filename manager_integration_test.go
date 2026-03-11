@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +16,8 @@ import (
 )
 
 func TestManagerLifecycleWithTmux(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is required")
 	}
@@ -76,17 +77,20 @@ startup_timeout = "5s"
 		t.Fatalf("write config: %v", err)
 	}
 
-	oldPath := os.Getenv("PATH")
 	t.Cleanup(func() {
 		_ = exec.Command("tmux", "kill-session", "-t", session).Run()
 	})
-	t.Setenv("HOME", home)
-	t.Setenv("DEVPORT_STATE_DIR", stateDir)
-	t.Setenv("PATH", binDir+":"+oldPath)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	manager, err := NewManager(configPath, &stdout, &stderr)
+	manager, err := NewManagerWithRuntime(RuntimeConfig{
+		HomeDir:    home,
+		StateDir:   stateDir,
+		ConfigPath: configPath,
+		Env: map[string]string{
+			"PATH": binDir + ":" + os.Getenv("PATH"),
+		},
+	}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -154,7 +158,9 @@ startup_timeout = "5s"
 		t.Fatalf("expected restart count reset after start, got %d", record.RestartCount)
 	}
 
-	if err := manager.Restart(ctx, "app/web"); err != nil {
+	if err := retryBusyOperation(ctx, 5*time.Second, func() error {
+		return manager.Restart(ctx, "app/web")
+	}); err != nil {
 		t.Fatalf("Restart before Up recovery: %v", err)
 	}
 	record = findServiceRecord(t, manager, "app/web")
@@ -243,46 +249,6 @@ func buildTestBinary(t *testing.T, output, target string) {
 	}
 }
 
-func reserveIntegrationTCPPortRange(t *testing.T, extra int) (int, int, int) {
-	t.Helper()
-
-	listeners := make([]net.Listener, 0, 2)
-	ports := make([]int, 0, 2)
-	for len(ports) < 2 {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatalf("reserve tcp port: %v", err)
-		}
-		port := listener.Addr().(*net.TCPAddr).Port
-		duplicate := false
-		for _, existing := range ports {
-			if existing == port {
-				duplicate = true
-				break
-			}
-		}
-		if duplicate {
-			_ = listener.Close()
-			continue
-		}
-		listeners = append(listeners, listener)
-		ports = append(ports, port)
-	}
-	for _, listener := range listeners {
-		_ = listener.Close()
-	}
-
-	start := min(ports[0], ports[1])
-	end := max(ports[0], ports[1]) + extra
-	if end > 65535 {
-		start -= end - 65535
-		if start < 1024 {
-			t.Fatalf("reserved port range overflow: start=%d end=%d", start, end)
-		}
-	}
-	return start, ports[0], ports[1]
-}
-
 func findStatusByKey(t *testing.T, statuses []StatusView, key string) StatusView {
 	t.Helper()
 	for _, status := range statuses {
@@ -304,4 +270,25 @@ func findServiceRecord(t *testing.T, manager *Manager, key string) *ServiceRecor
 		t.Fatalf("service record %s not found", key)
 	}
 	return record
+}
+
+func retryBusyOperation(ctx context.Context, timeout time.Duration, operation func() error) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		err := operation()
+		if err == nil {
+			return nil
+		}
+		if !strings.Contains(err.Error(), "is busy") {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
 }

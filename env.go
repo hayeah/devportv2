@@ -17,6 +17,10 @@ type Environment struct {
 }
 
 func LoadEnvironment(service ServiceSpec) (Environment, error) {
+	return LoadEnvironmentWithRuntime(service, RuntimeConfig{})
+}
+
+func LoadEnvironmentWithRuntime(service ServiceSpec, runtime RuntimeConfig) (Environment, error) {
 	values := map[string]string{}
 	for _, item := range os.Environ() {
 		key, value, ok := strings.Cut(item, "=")
@@ -24,9 +28,12 @@ func LoadEnvironment(service ServiceSpec) (Environment, error) {
 			values[key] = value
 		}
 	}
+	for key, value := range runtime.Env {
+		values[key] = value
+	}
 
 	for _, path := range service.EnvFiles {
-		expanded, err := ExpandPath(path)
+		expanded, err := runtime.ExpandPath(path)
 		if err != nil {
 			return Environment{}, fmt.Errorf("expand env file %s: %w", path, err)
 		}

@@ -43,8 +43,11 @@ func TestEndToEndInvariantChaosRecovery(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is required")
 	}
+	t.Parallel()
 
 	t.Run("status_reconciles_stale_starting_without_lock", func(t *testing.T) {
+		t.Parallel()
+
 		h := newHarness(t)
 		h.writeWorkerOnlyConfig()
 		t.Cleanup(func() {
@@ -106,6 +109,8 @@ func TestEndToEndInvariantChaosRecovery(t *testing.T) {
 	})
 
 	t.Run("start_reaps_orphan_child_after_supervisor_kill", func(t *testing.T) {
+		t.Parallel()
+
 		h := newHarness(t)
 		h.writeWorkerOnlyConfig()
 		t.Cleanup(func() {
@@ -155,6 +160,8 @@ func TestEndToEndInvariantChaosRecovery(t *testing.T) {
 	})
 
 	t.Run("stop_cleans_orphan_child_after_supervisor_kill", func(t *testing.T) {
+		t.Parallel()
+
 		h := newHarness(t)
 		h.writeWorkerOnlyConfig()
 		t.Cleanup(func() {

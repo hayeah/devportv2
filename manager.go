@@ -7,18 +7,16 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"os/exec"
 	"sort"
 	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
-
-	"github.com/hayeah/devportv2/logger"
 )
 
 type Manager struct {
+	runtime    RuntimeConfig
 	paths      Paths
 	config     *Config
 	store      *Store
@@ -52,39 +50,15 @@ type IngressDocument struct {
 }
 
 func NewManager(explicitConfig string, stdout, stderr io.Writer) (*Manager, error) {
-	paths, err := ResolvePaths(explicitConfig)
+	return NewManagerWithRuntime(RuntimeConfig{ConfigPath: explicitConfig}, stdout, stderr)
+}
+
+func NewManagerWithRuntime(runtime RuntimeConfig, stdout, stderr io.Writer) (*Manager, error) {
+	manager, err := InitializeManager(runtime, ManagerIO{Stdout: stdout, Stderr: stderr})
 	if err != nil {
 		return nil, err
 	}
-
-	config, err := LoadConfig(paths.Config)
-	if err != nil {
-		return nil, err
-	}
-
-	store, err := OpenStore(paths.DB)
-	if err != nil {
-		return nil, err
-	}
-
-	executable, err := os.Executable()
-	if err != nil {
-		_ = store.Close()
-		return nil, err
-	}
-
-	manager := &Manager{
-		paths:      paths,
-		config:     config,
-		store:      store,
-		tmux:       NewTmux(config.TmuxSession),
-		log:        logger.New("devport"),
-		stdout:     stdout,
-		stderr:     stderr,
-		executable: executable,
-	}
-
-	manager.log.Info("spec_loaded", "config", paths.Config, "services", len(config.Services))
+	manager.log.Info("spec_loaded", "config", manager.paths.Config, "services", len(manager.config.Services))
 	return manager, nil
 }
 
@@ -165,8 +139,18 @@ func (m *Manager) startLocked(ctx context.Context, key, cause string) error {
 	}
 
 	window := m.tmux.WindowName(key)
-	command := []string{m.executable, "supervise", "--file", m.paths.Config, "--key", key}
-	if err := m.tmux.Start(window, command); err != nil {
+	runtimeJSON, err := m.runtime.MarshalJSONValue()
+	if err != nil {
+		return err
+	}
+	command := []string{
+		m.executable,
+		"supervise",
+		"--file", m.paths.Config,
+		"--key", key,
+		"--runtime-json", runtimeJSON,
+	}
+	if err := m.tmux.Start(window, m.runtime.TmuxEnvironment(), command); err != nil {
 		return err
 	}
 
@@ -478,11 +462,11 @@ func (m *Manager) Status(ctx context.Context, keys []string) ([]StatusView, erro
 				return nil, err
 			}
 		} else {
-			env, err := LoadEnvironment(service)
+			env, err := LoadEnvironmentWithRuntime(service, m.runtime)
 			if err != nil {
 				return nil, err
 			}
-			cwd, err := ExpandPath(service.CWD)
+			cwd, err := m.runtime.ExpandPath(service.CWD)
 			if err != nil {
 				return nil, err
 			}

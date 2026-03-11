@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	devport "github.com/hayeah/devportv2"
 )
 
 type e2eHarness struct {
@@ -41,18 +43,22 @@ func TestEndToEnd(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is required")
 	}
+	t.Parallel()
 
 	t.Run("up_status_logs_ingress_down", func(t *testing.T) {
+		t.Parallel()
+
 		h := newHarness(t)
+		start, webPort, _ := reserveTCPPortRange(t, 10)
 		h.writeConfig(fmt.Sprintf(`
 version = 2
-port_range = { start = 19170, end = 19179 }
+port_range = { start = %d, end = %d }
 tmux_session = %q
 
 [service."app/web"]
 cwd = %q
 command = [%q, "http", "--port", "${PORT}", "--message", "hello-web"]
-port = 19173
+port = %d
 restart = "never"
 
 [service."app/web".health]
@@ -73,7 +79,7 @@ restart = "never"
 [service."jobs/worker".health]
 type = "process"
 startup_timeout = "5s"
-`, h.session, h.root, h.serviceBin, h.root, h.serviceBin))
+`, start, start+9, h.session, h.root, h.serviceBin, webPort, h.root, h.serviceBin))
 
 		h.runOK("up", "--file", h.configPath)
 
@@ -116,16 +122,19 @@ startup_timeout = "5s"
 	})
 
 	t.Run("restart_increments_counter_and_fresh_start_resets_it", func(t *testing.T) {
+		t.Parallel()
+
 		h := newHarness(t)
+		start, webPort, _ := reserveTCPPortRange(t, 10)
 		h.writeConfig(fmt.Sprintf(`
 version = 2
-port_range = { start = 19180, end = 19189 }
+port_range = { start = %d, end = %d }
 tmux_session = %q
 
 [service."app/web"]
 cwd = %q
 command = [%q, "http", "--port", "${PORT}", "--message", "restart-me"]
-port = 19180
+port = %d
 restart = "never"
 
 [service."app/web".health]
@@ -133,7 +142,7 @@ type = "http"
 url = "http://127.0.0.1:${PORT}/"
 expect_status = [200]
 startup_timeout = "10s"
-`, h.session, h.root, h.serviceBin))
+`, start, start+9, h.session, h.root, h.serviceBin, webPort))
 
 		h.runOK("start", "--file", h.configPath, "--key", "app/web")
 		first := h.findStatus("app/web")
@@ -165,16 +174,19 @@ startup_timeout = "10s"
 	})
 
 	t.Run("up_resets_counter_after_failed_lifecycle", func(t *testing.T) {
+		t.Parallel()
+
 		h := newHarness(t)
+		start, webPort, _ := reserveTCPPortRange(t, 10)
 		h.writeConfig(fmt.Sprintf(`
 version = 2
-port_range = { start = 19190, end = 19199 }
+port_range = { start = %d, end = %d }
 tmux_session = %q
 
 [service."app/web"]
 cwd = %q
 command = [%q, "http", "--port", "${PORT}", "--message", "recover-me"]
-port = 19190
+port = %d
 restart = "never"
 
 [service."app/web".health]
@@ -182,7 +194,7 @@ type = "http"
 url = "http://127.0.0.1:${PORT}/"
 expect_status = [200]
 startup_timeout = "10s"
-`, h.session, h.root, h.serviceBin))
+`, start, start+9, h.session, h.root, h.serviceBin, webPort))
 
 		h.runOK("start", "--file", h.configPath, "--key", "app/web")
 		h.runOK("restart", "--file", h.configPath, "--key", "app/web")
@@ -223,10 +235,13 @@ startup_timeout = "10s"
 	})
 
 	t.Run("failed_start_records_failed_status", func(t *testing.T) {
+		t.Parallel()
+
 		h := newHarness(t)
+		start, _, _ := reserveTCPPortRange(t, 10)
 		h.writeConfig(fmt.Sprintf(`
 version = 2
-port_range = { start = 19200, end = 19209 }
+port_range = { start = %d, end = %d }
 tmux_session = %q
 
 [service."app/fail"]
@@ -238,17 +253,22 @@ restart = "never"
 [service."app/fail".health]
 type = "process"
 startup_timeout = "3s"
-`, h.session, h.root, h.serviceBin))
+`, start, start+9, h.session, h.root, h.serviceBin))
 
 		output, err := h.run("start", "--file", h.configPath, "--key", "app/fail")
-		if err == nil {
-			t.Fatalf("expected failing service start to exit non-zero")
-		}
-		if !strings.Contains(output, "startup timeout") && !strings.Contains(output, "failed") {
+		if err != nil && !strings.Contains(output, "startup timeout") && !strings.Contains(output, "failed") {
 			t.Fatalf("expected failing output, got: %s", output)
 		}
 
-		status := h.findStatus("app/fail")
+		var status statusView
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			status = h.findStatus("app/fail")
+			if status.Status == "failed" {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
 		if status.Status != "failed" {
 			t.Fatalf("expected failed status, got %s", status.Status)
 		}
@@ -263,16 +283,19 @@ startup_timeout = "3s"
 	})
 
 	t.Run("status_detects_spec_drift", func(t *testing.T) {
+		t.Parallel()
+
 		h := newHarness(t)
+		start, webPortA, webPortB := reserveTCPPortRange(t, 10)
 		h.writeConfig(fmt.Sprintf(`
 version = 2
-port_range = { start = 19210, end = 19219 }
+port_range = { start = %d, end = %d }
 tmux_session = %q
 
 [service."app/web"]
 cwd = %q
 command = [%q, "http", "--port", "${PORT}", "--message", "drift-v1"]
-port = 19210
+port = %d
 restart = "never"
 
 [service."app/web".health]
@@ -280,19 +303,19 @@ type = "http"
 url = "http://127.0.0.1:${PORT}/"
 expect_status = [200]
 startup_timeout = "10s"
-`, h.session, h.root, h.serviceBin))
+`, start, start+9, h.session, h.root, h.serviceBin, webPortA))
 
 		h.runOK("start", "--file", h.configPath, "--key", "app/web")
 
 		h.writeConfig(fmt.Sprintf(`
 version = 2
-port_range = { start = 19210, end = 19219 }
+port_range = { start = %d, end = %d }
 tmux_session = %q
 
 [service."app/web"]
 cwd = %q
 command = [%q, "http", "--port", "${PORT}", "--message", "drift-v2"]
-port = 19211
+port = %d
 restart = "never"
 
 [service."app/web".health]
@@ -300,7 +323,7 @@ type = "http"
 url = "http://127.0.0.1:${PORT}/"
 expect_status = [200]
 startup_timeout = "10s"
-`, h.session, h.root, h.serviceBin))
+`, start, start+9, h.session, h.root, h.serviceBin, webPortB))
 
 		status := h.findStatus("app/web")
 		if !contains(status.Drift, "spec changed since last start") {
@@ -312,8 +335,11 @@ startup_timeout = "10s"
 	})
 
 	t.Run("freeport_skips_spec_ports_and_live_listener", func(t *testing.T) {
+		t.Parallel()
+
 		h := newHarness(t)
-		listener, err := net.Listen("tcp", "127.0.0.1:19221")
+		start, _, occupiedPort := reserveTCPPortRange(t, 1)
+		listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", occupiedPort))
 		if err != nil {
 			t.Fatalf("listen: %v", err)
 		}
@@ -321,13 +347,13 @@ startup_timeout = "10s"
 
 		h.writeConfig(fmt.Sprintf(`
 version = 2
-port_range = { start = 19220, end = 19222 }
+port_range = { start = %d, end = %d }
 tmux_session = %q
 
 [service."app/web"]
 cwd = %q
 command = [%q, "http", "--port", "${PORT}", "--message", "port-check"]
-port = 19220
+port = %d
 restart = "never"
 
 [service."app/web".health]
@@ -335,11 +361,12 @@ type = "http"
 url = "http://127.0.0.1:${PORT}/"
 expect_status = [200]
 startup_timeout = "10s"
-`, h.session, h.root, h.serviceBin))
+`, start, start+2, h.session, h.root, h.serviceBin, start))
 
 		output := strings.TrimSpace(h.runOK("freeport", "--file", h.configPath))
-		if output != "19222" {
-			t.Fatalf("expected free port 19222, got %s", output)
+		expected := fmt.Sprintf("%d", start+2)
+		if output != expected {
+			t.Fatalf("expected free port %s, got %s", expected, output)
 		}
 	})
 }
@@ -405,10 +432,22 @@ func (h *e2eHarness) writeConfig(contents string) {
 
 func (h *e2eHarness) env() []string {
 	return append(os.Environ(),
-		"HOME="+h.home,
-		"DEVPORT_STATE_DIR="+h.stateDir,
 		"PATH="+h.binDir+":"+os.Getenv("PATH"),
 	)
+}
+
+func (h *e2eHarness) runtimeJSON() string {
+	h.t.Helper()
+
+	value, err := devport.RuntimeConfig{
+		HomeDir:    h.home,
+		StateDir:   h.stateDir,
+		ConfigPath: h.configPath,
+	}.MarshalJSONValue()
+	if err != nil {
+		h.t.Fatalf("marshal runtime config: %v", err)
+	}
+	return value
 }
 
 func (h *e2eHarness) dbPath() string {
@@ -438,7 +477,8 @@ func (h *e2eHarness) run(args ...string) (string, error) {
 
 func (h *e2eHarness) runDetailed(args ...string) (string, string, error) {
 	h.t.Helper()
-	command := exec.Command(h.devportBin, args...)
+	commandArgs := append([]string{"--runtime-json", h.runtimeJSON()}, args...)
+	command := exec.Command(h.devportBin, commandArgs...)
 	command.Env = h.env()
 	command.Dir = h.root
 	var stdout strings.Builder

@@ -1,8 +1,6 @@
 package devport
 
 import (
-	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 )
@@ -15,12 +13,16 @@ type Paths struct {
 }
 
 func ResolvePaths(explicitConfig string) (Paths, error) {
-	configPath, err := resolveConfigPath(explicitConfig)
+	return ResolvePathsWithRuntime(RuntimeConfig{ConfigPath: explicitConfig})
+}
+
+func ResolvePathsWithRuntime(runtime RuntimeConfig) (Paths, error) {
+	configPath, err := resolveConfigPath(runtime)
 	if err != nil {
 		return Paths{}, err
 	}
 
-	stateDir, err := resolveStateDir()
+	stateDir, err := resolveStateDir(runtime)
 	if err != nil {
 		return Paths{}, err
 	}
@@ -33,38 +35,36 @@ func ResolvePaths(explicitConfig string) (Paths, error) {
 	}, nil
 }
 
-func resolveConfigPath(explicit string) (string, error) {
+func resolveConfigPath(runtime RuntimeConfig) (string, error) {
 	switch {
-	case explicit != "":
-		return ExpandPath(explicit)
-	case os.Getenv("DEVPORT_CONFIG") != "":
-		return ExpandPath(os.Getenv("DEVPORT_CONFIG"))
+	case strings.TrimSpace(runtime.ConfigPath) != "":
+		return runtime.ExpandPath(runtime.ConfigPath)
+	case lookupNonEmpty(runtime, "DEVPORT_CONFIG") != "":
+		value := lookupNonEmpty(runtime, "DEVPORT_CONFIG")
+		return runtime.ExpandPath(value)
 	default:
-		return ExpandPath("~/.config/devport/devport.toml")
+		return runtime.ExpandPath("~/.config/devport/devport.toml")
 	}
 }
 
-func resolveStateDir() (string, error) {
-	if value := strings.TrimSpace(os.Getenv("DEVPORT_STATE_DIR")); value != "" {
-		return ExpandPath(value)
+func resolveStateDir(runtime RuntimeConfig) (string, error) {
+	if strings.TrimSpace(runtime.StateDir) != "" {
+		return runtime.ExpandPath(runtime.StateDir)
 	}
-	return ExpandPath("~/.local/share/devport")
+	if value := lookupNonEmpty(runtime, "DEVPORT_STATE_DIR"); value != "" {
+		return runtime.ExpandPath(value)
+	}
+	return runtime.ExpandPath("~/.local/share/devport")
 }
 
 func ExpandPath(path string) (string, error) {
-	if path == "" {
-		return "", fmt.Errorf("path is empty")
+	return RuntimeConfig{}.ExpandPath(path)
+}
+
+func lookupNonEmpty(runtime RuntimeConfig, key string) string {
+	value, ok := runtime.LookupEnv(key)
+	if !ok {
+		return ""
 	}
-	if strings.HasPrefix(path, "~") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve home: %w", err)
-		}
-		if path == "~" {
-			path = home
-		} else if strings.HasPrefix(path, "~/") {
-			path = filepath.Join(home, path[2:])
-		}
-	}
-	return filepath.Abs(os.ExpandEnv(path))
+	return strings.TrimSpace(value)
 }

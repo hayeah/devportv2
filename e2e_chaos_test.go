@@ -32,10 +32,13 @@ func TestEndToEndChaosMonkey(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is required")
 	}
+	t.Parallel()
 
 	seeds := []int64{11, 29}
 	for _, seed := range seeds {
 		t.Run(fmt.Sprintf("seed-%d", seed), func(t *testing.T) {
+			t.Parallel()
+
 			rng := rand.New(rand.NewSource(seed))
 			h := newHarness(t)
 			start, portA, portB := reserveTCPPortRange(t, 20)
@@ -54,47 +57,6 @@ func TestEndToEndChaosMonkey(t *testing.T) {
 			h.assertEventuallyConsistent(webPort)
 		})
 	}
-}
-
-func reserveTCPPortRange(t *testing.T, extra int) (int, int, int) {
-	t.Helper()
-
-	listeners := make([]net.Listener, 0, 2)
-	ports := make([]int, 0, 2)
-	for len(ports) < 2 {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatalf("reserve tcp port: %v", err)
-		}
-		port := listener.Addr().(*net.TCPAddr).Port
-		duplicate := false
-		for _, existing := range ports {
-			if existing == port {
-				duplicate = true
-				break
-			}
-		}
-		if duplicate {
-			_ = listener.Close()
-			continue
-		}
-		listeners = append(listeners, listener)
-		ports = append(ports, port)
-	}
-	for _, listener := range listeners {
-		_ = listener.Close()
-	}
-
-	portA, portB := ports[0], ports[1]
-	start := min(portA, portB)
-	end := max(portA, portB) + extra
-	if end > 65535 {
-		start -= end - 65535
-		if start < 1024 {
-			t.Fatalf("reserved port range overflow: start=%d end=%d", start, end)
-		}
-	}
-	return start, portA, portB
 }
 
 func (h *e2eHarness) writeChaosConfig(portRangeStart, webPort int) {

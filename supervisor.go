@@ -31,11 +31,11 @@ func NewSupervisor(ctx context.Context, manager *Manager, key string) (*Supervis
 		return nil, err
 	}
 
-	env, err := LoadEnvironment(service)
+	env, err := LoadEnvironmentWithRuntime(service, manager.runtime)
 	if err != nil {
 		return nil, err
 	}
-	cwd, err := ExpandPath(service.CWD)
+	cwd, err := manager.runtime.ExpandPath(service.CWD)
 	if err != nil {
 		return nil, err
 	}
