@@ -9,7 +9,6 @@ import (
 	"math/rand"
 	"net"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -310,7 +309,7 @@ func (h *e2eHarness) checkConsistency(desiredWebPort int) error {
 
 func (h *e2eHarness) dbStates() map[string]dbServiceState {
 	h.t.Helper()
-	db, err := sql.Open("sqlite", filepath.Join(h.home, ".local", "share", "devport", "devport.db"))
+	db, err := sql.Open("sqlite", h.dbPath())
 	if err != nil {
 		h.t.Fatalf("open db: %v", err)
 	}
@@ -337,10 +336,6 @@ func (h *e2eHarness) dbStates() map[string]dbServiceState {
 		h.t.Fatalf("iterate services: %v", err)
 	}
 	return states
-}
-
-func (h *e2eHarness) lockPath(window string) string {
-	return filepath.Join(h.home, ".local", "share", "devport", "locks", window+".lock")
 }
 
 func (h *e2eHarness) tmuxWindowExists(window string) bool {

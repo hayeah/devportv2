@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
@@ -350,11 +349,6 @@ func (h *e2eHarness) waitForCondition(description string, check func() bool) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	h.t.Fatalf("timed out waiting for %s", description)
-}
-
-func (h *e2eHarness) dbPath() string {
-	h.t.Helper()
-	return filepath.Join(h.home, ".local", "share", "devport", "devport.db")
 }
 
 func processAliveTest(pid int) bool {

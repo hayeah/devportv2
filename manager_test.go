@@ -48,18 +48,8 @@ hostname = "web.example.test"
 		t.Fatalf("write config: %v", err)
 	}
 
-	oldHome := os.Getenv("HOME")
-	oldState := os.Getenv("DEVPORT_STATE_DIR")
-	t.Cleanup(func() {
-		_ = os.Setenv("HOME", oldHome)
-		_ = os.Setenv("DEVPORT_STATE_DIR", oldState)
-	})
-	if err := os.Setenv("HOME", home); err != nil {
-		t.Fatalf("set HOME: %v", err)
-	}
-	if err := os.Setenv("DEVPORT_STATE_DIR", filepath.Join(dir, "state")); err != nil {
-		t.Fatalf("set DEVPORT_STATE_DIR: %v", err)
-	}
+	t.Setenv("HOME", home)
+	t.Setenv("DEVPORT_STATE_DIR", filepath.Join(dir, "state"))
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -131,18 +121,8 @@ type = "none"
 		t.Fatalf("write config: %v", err)
 	}
 
-	oldHome := os.Getenv("HOME")
-	oldState := os.Getenv("DEVPORT_STATE_DIR")
-	t.Cleanup(func() {
-		_ = os.Setenv("HOME", oldHome)
-		_ = os.Setenv("DEVPORT_STATE_DIR", oldState)
-	})
-	if err := os.Setenv("HOME", home); err != nil {
-		t.Fatalf("set HOME: %v", err)
-	}
-	if err := os.Setenv("DEVPORT_STATE_DIR", filepath.Join(dir, "state")); err != nil {
-		t.Fatalf("set DEVPORT_STATE_DIR: %v", err)
-	}
+	t.Setenv("HOME", home)
+	t.Setenv("DEVPORT_STATE_DIR", filepath.Join(dir, "state"))
 
 	manager, err := NewManager(configPath, &bytes.Buffer{}, &bytes.Buffer{})
 	if err != nil {

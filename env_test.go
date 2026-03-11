@@ -9,18 +9,8 @@ import (
 
 func TestLoadEnvironmentAndExpansion(t *testing.T) {
 	dir := t.TempDir()
-	oldHome := os.Getenv("HOME")
-	oldEnv := os.Getenv("FROM_ENV")
-	t.Cleanup(func() {
-		_ = os.Setenv("HOME", oldHome)
-		_ = os.Setenv("FROM_ENV", oldEnv)
-	})
-	if err := os.Setenv("HOME", dir); err != nil {
-		t.Fatalf("set HOME: %v", err)
-	}
-	if err := os.Setenv("FROM_ENV", "ambient"); err != nil {
-		t.Fatalf("set FROM_ENV: %v", err)
-	}
+	t.Setenv("HOME", dir)
+	t.Setenv("FROM_ENV", "ambient")
 
 	envFile := filepath.Join(dir, ".env.test")
 	if err := os.WriteFile(envFile, []byte("FROM_FILE=file\nOVERRIDE=from-file\n"), 0o644); err != nil {

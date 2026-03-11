@@ -16,6 +16,7 @@ type e2eHarness struct {
 	t          *testing.T
 	root       string
 	home       string
+	stateDir   string
 	binDir     string
 	devportBin string
 	serviceBin string
@@ -283,9 +284,13 @@ func newHarness(t *testing.T) *e2eHarness {
 	}
 	tempDir := t.TempDir()
 	home := filepath.Join(tempDir, "home")
+	stateDir := filepath.Join(tempDir, "state")
 	binDir := filepath.Join(tempDir, "bin")
 	if err := os.MkdirAll(home, 0o755); err != nil {
 		t.Fatalf("mkdir home: %v", err)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
 	}
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatalf("mkdir bin: %v", err)
@@ -300,6 +305,7 @@ func newHarness(t *testing.T) *e2eHarness {
 		t:          t,
 		root:       root,
 		home:       home,
+		stateDir:   stateDir,
 		binDir:     binDir,
 		devportBin: devportBin,
 		serviceBin: serviceBin,
@@ -331,8 +337,19 @@ func (h *e2eHarness) writeConfig(contents string) {
 func (h *e2eHarness) env() []string {
 	return append(os.Environ(),
 		"HOME="+h.home,
+		"DEVPORT_STATE_DIR="+h.stateDir,
 		"PATH="+h.binDir+":"+os.Getenv("PATH"),
 	)
+}
+
+func (h *e2eHarness) dbPath() string {
+	h.t.Helper()
+	return filepath.Join(h.stateDir, "devport.db")
+}
+
+func (h *e2eHarness) lockPath(window string) string {
+	h.t.Helper()
+	return filepath.Join(h.stateDir, "locks", window+".lock")
 }
 
 func (h *e2eHarness) runOK(args ...string) string {

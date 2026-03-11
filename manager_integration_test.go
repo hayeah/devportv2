@@ -76,24 +76,13 @@ startup_timeout = "5s"
 		t.Fatalf("write config: %v", err)
 	}
 
-	oldHome := os.Getenv("HOME")
-	oldState := os.Getenv("DEVPORT_STATE_DIR")
 	oldPath := os.Getenv("PATH")
 	t.Cleanup(func() {
-		_ = os.Setenv("HOME", oldHome)
-		_ = os.Setenv("DEVPORT_STATE_DIR", oldState)
-		_ = os.Setenv("PATH", oldPath)
 		_ = exec.Command("tmux", "kill-session", "-t", session).Run()
 	})
-	if err := os.Setenv("HOME", home); err != nil {
-		t.Fatalf("set HOME: %v", err)
-	}
-	if err := os.Setenv("DEVPORT_STATE_DIR", stateDir); err != nil {
-		t.Fatalf("set DEVPORT_STATE_DIR: %v", err)
-	}
-	if err := os.Setenv("PATH", binDir+":"+oldPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
+	t.Setenv("HOME", home)
+	t.Setenv("DEVPORT_STATE_DIR", stateDir)
+	t.Setenv("PATH", binDir+":"+oldPath)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
