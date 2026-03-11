@@ -1,0 +1,10 @@
+- [x] Scaffold Go CLI and core package layout
+- [x] Parse and validate v2 TOML spec
+- [x] Resolve paths, env files, and template interpolation
+- [x] Build SQLite durable state and event storage
+- [x] Implement flock-based supervisor liveness checks
+- [x] Implement tmux session/window management
+- [x] Implement start/stop/restart/up/down/status/logs/freeport/ingress commands
+- [x] Implement hidden `supervise` command run inside tmux
+- [x] Add blackbox end-to-end tests that drive the built CLI
+- [x] Verify against real tmux processes and summarize gaps
