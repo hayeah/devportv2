@@ -21,7 +21,7 @@ tmux_session = "devport"
 
 [service."app/web"]
 cwd = "~/src/myapp"
-command = ["bin/web", "--port", "${PORT}"]
+command = ["bin/web", "--port", "${APP_PORT}"]
 port = 19000
 port_env = "APP_PORT"
 env_files = [".env", ".env.local"]
@@ -29,7 +29,7 @@ restart = "never"
 
 [service."app/web".health]
 type = "http"
-url = "http://127.0.0.1:${PORT}/healthz"
+url = "http://127.0.0.1:${APP_PORT}/healthz"
 expect_status = [200]
 startup_timeout = "10s"
 
@@ -53,7 +53,7 @@ startup_timeout = "5s"
 - `command` — command array (required)
 - `port` — fixed port number (set exactly one of `port` or `no_port = true`)
 - `no_port` — set `true` for services that don't listen on a port
-- `port_env` — inject the port under an additional env var name (requires `port`)
+- `port_env` — override the default `PORT` env var name (requires `port`). Use colon-separated names for multiple vars (e.g. `"VITE_PORT:PORT"`)
 - `env_files` — list of dotenv files, later files override earlier ones
 - `restart` — only `"never"` is supported today
 - `health` — health check block (required for every service)
@@ -68,8 +68,8 @@ startup_timeout = "5s"
 
 ### Variable interpolation
 
-- `${PORT}` — auto-injected for port-bearing services
-- `${env:NAME}` or `${NAME}` — expand from merged environment (process env + env_files)
+- `${PORT}` — auto-injected for port-bearing services (unless `port_env` overrides it)
+- `${NAME}` — expand from merged environment (process env + env_files + port vars)
 
 ### Validation rules
 

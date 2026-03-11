@@ -40,10 +40,14 @@ func LoadEnvironment(service ServiceSpec) (Environment, error) {
 	}
 
 	if service.Port > 0 {
-		values["PORT"] = strconv.Itoa(service.Port)
-	}
-	if service.PortEnv != "" && service.Port > 0 {
-		values[service.PortEnv] = strconv.Itoa(service.Port)
+		portStr := strconv.Itoa(service.Port)
+		if service.PortEnv != "" {
+			for _, name := range strings.Split(service.PortEnv, ":") {
+				values[name] = portStr
+			}
+		} else {
+			values["PORT"] = portStr
+		}
 	}
 
 	return Environment{values: values}, nil
@@ -61,9 +65,6 @@ func (e Environment) ExpandString(value string) string {
 			return match
 		}
 		key := submatches[1]
-		if strings.HasPrefix(key, "env:") {
-			key = strings.TrimPrefix(key, "env:")
-		}
 		if value, ok := e.values[key]; ok {
 			return value
 		}
