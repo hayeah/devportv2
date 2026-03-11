@@ -54,7 +54,7 @@ hostname = "web.example.test"
 	var stderr bytes.Buffer
 	manager, err := NewManagerWithRuntime(RuntimeConfig{
 		HomeDir:    home,
-		StateDir:   filepath.Join(dir, "state"),
+		RootDir:    filepath.Join(dir, "state"),
 		ConfigPath: configPath,
 	}, &stdout, &stderr)
 	if err != nil {
@@ -128,7 +128,7 @@ type = "none"
 
 	manager, err := NewManagerWithRuntime(RuntimeConfig{
 		HomeDir:    home,
-		StateDir:   filepath.Join(dir, "state"),
+		RootDir:    filepath.Join(dir, "state"),
 		ConfigPath: configPath,
 	}, &bytes.Buffer{}, &bytes.Buffer{})
 	if err != nil {

@@ -16,14 +16,10 @@ import (
 )
 
 type Manager struct {
-	runtime    RuntimeConfig
-	paths      Paths
-	config     *Config
+	runtime    *Runtime
 	store      *Store
 	tmux       *Tmux
 	log        *slog.Logger
-	stdout     io.Writer
-	stderr     io.Writer
 	executable string
 }
 
@@ -66,7 +62,7 @@ func NewManagerWithRuntime(runtime RuntimeConfig, stdout, stderr io.Writer) (*Ma
 	if err != nil {
 		return nil, err
 	}
-	manager.log.Info("spec_loaded", "config", manager.paths.Config, "services", len(manager.config.Services))
+	manager.log.Info("spec_loaded", "config", manager.runtime.Paths.Config, "services", len(manager.runtime.Spec.Services))
 	return manager, nil
 }
 
@@ -99,7 +95,7 @@ func (m *Manager) Start(ctx context.Context, key string) error {
 }
 
 func (m *Manager) startLocked(ctx context.Context, key string) error {
-	service, err := m.config.Service(key)
+	service, err := m.runtime.Spec.Service(key)
 	if err != nil {
 		return err
 	}
@@ -147,18 +143,18 @@ func (m *Manager) startLocked(ctx context.Context, key string) error {
 	}
 
 	window := m.tmux.WindowName(key)
-	runtimeJSON, err := m.runtime.MarshalJSONValue()
+	runtimeJSON, err := m.runtime.Config.MarshalJSONValue()
 	if err != nil {
 		return err
 	}
 	command := []string{
 		m.executable,
 		"supervise",
-		"--file", m.paths.Config,
+		"--file", m.runtime.Paths.Config,
 		"--key", key,
 		"--runtime-json", runtimeJSON,
 	}
-	if err := m.tmux.Start(window, m.runtime.TmuxEnvironment(), command); err != nil {
+	if err := m.tmux.Start(window, m.runtime.Config.TmuxEnvironment(), command); err != nil {
 		return err
 	}
 
@@ -289,7 +285,7 @@ func (m *Manager) Restart(ctx context.Context, key string) error {
 }
 
 func (m *Manager) Up(ctx context.Context, keys []string) error {
-	selected, err := m.config.ServiceKeys(keys)
+	selected, err := m.runtime.Spec.ServiceKeys(keys)
 	if err != nil {
 		return err
 	}
@@ -318,7 +314,7 @@ func (m *Manager) Up(ctx context.Context, keys []string) error {
 }
 
 func (m *Manager) Down(ctx context.Context, keys []string) error {
-	selected, err := m.config.ServiceKeys(keys)
+	selected, err := m.runtime.Spec.ServiceKeys(keys)
 	if err != nil {
 		return err
 	}
@@ -343,26 +339,26 @@ func (m *Manager) Logs(ctx context.Context, key string, lines int) (string, erro
 }
 
 func (m *Manager) FreePort(keys []string) (int, error) {
-	if m.config.PortRange.Start == 0 || m.config.PortRange.End == 0 {
+	if m.runtime.Spec.PortRange.Start == 0 || m.runtime.Spec.PortRange.End == 0 {
 		return 0, fmt.Errorf("config must define port_range")
 	}
 
 	used := map[int]bool{}
-	selected, err := m.config.ServiceKeys(keys)
+	selected, err := m.runtime.Spec.ServiceKeys(keys)
 	if err != nil && len(keys) > 0 {
 		return 0, err
 	}
 	if len(keys) == 0 {
-		selected, _ = m.config.ServiceKeys(nil)
+		selected, _ = m.runtime.Spec.ServiceKeys(nil)
 	}
 	for _, key := range selected {
-		service := m.config.Services[key]
+		service := m.runtime.Spec.Services[key]
 		if service.Port > 0 {
 			used[service.Port] = true
 		}
 	}
 
-	for port := m.config.PortRange.Start; port <= m.config.PortRange.End; port++ {
+	for port := m.runtime.Spec.PortRange.Start; port <= m.runtime.Spec.PortRange.End; port++ {
 		if used[port] {
 			continue
 		}
@@ -370,11 +366,11 @@ func (m *Manager) FreePort(keys []string) (int, error) {
 			return port, nil
 		}
 	}
-	return 0, fmt.Errorf("no free port in range %d-%d", m.config.PortRange.Start, m.config.PortRange.End)
+	return 0, fmt.Errorf("no free port in range %d-%d", m.runtime.Spec.PortRange.Start, m.runtime.Spec.PortRange.End)
 }
 
 func (m *Manager) Ingress(keys []string) ([]byte, error) {
-	rules, err := m.config.IngressRules(keys)
+	rules, err := m.runtime.Spec.IngressRules(keys)
 	if err != nil {
 		return nil, err
 	}
@@ -382,7 +378,7 @@ func (m *Manager) Ingress(keys []string) ([]byte, error) {
 }
 
 func (m *Manager) Status(ctx context.Context, keys []string) ([]StatusView, error) {
-	selected, err := m.config.ServiceKeys(keys)
+	selected, err := m.runtime.Spec.ServiceKeys(keys)
 	if err != nil {
 		return nil, err
 	}
@@ -400,7 +396,7 @@ func (m *Manager) Status(ctx context.Context, keys []string) ([]StatusView, erro
 }
 
 func (m *Manager) statusForKey(ctx context.Context, key string) (StatusView, error) {
-	service := m.config.Services[key]
+	service := m.runtime.Spec.Services[key]
 	record, err := m.store.Service(ctx, key)
 	if err != nil {
 		return StatusView{}, err
@@ -543,11 +539,11 @@ func (m *Manager) updateHealthStatus(ctx context.Context, status *serviceStatus)
 }
 
 func (m *Manager) probeServiceHealth(ctx context.Context, status *serviceStatus) (HealthResult, error) {
-	env, err := LoadEnvironmentWithRuntime(status.service, m.runtime)
+	env, err := LoadEnvironmentWithRuntime(status.service, m.runtime.Config)
 	if err != nil {
 		return HealthResult{}, err
 	}
-	cwd, err := m.runtime.ExpandPath(status.service.CWD)
+	cwd, err := m.runtime.Config.ExpandPath(status.service.CWD)
 	if err != nil {
 		return HealthResult{}, err
 	}
@@ -565,7 +561,7 @@ func runningStatus(status string) bool {
 }
 
 func (m *Manager) PrintStatus(statuses []StatusView, diffOnly bool) error {
-	writer := tabwriter.NewWriter(m.stdout, 0, 8, 2, ' ', 0)
+	writer := tabwriter.NewWriter(m.runtime.IO.Stdout, 0, 8, 2, ' ', 0)
 	defer writer.Flush()
 
 	if diffOnly {
@@ -607,11 +603,11 @@ func (m *Manager) Supervise(ctx context.Context, key string) error {
 }
 
 func (m *Manager) lockPath(key string) string {
-	return m.paths.Locks + "/" + m.tmux.WindowName(key) + ".lock"
+	return m.runtime.Paths.Locks + "/" + m.tmux.WindowName(key) + ".lock"
 }
 
 func (m *Manager) operationLockPath(key string) string {
-	return m.paths.Locks + "/" + m.tmux.WindowName(key) + ".op.lock"
+	return m.runtime.Paths.Locks + "/" + m.tmux.WindowName(key) + ".op.lock"
 }
 
 func (m *Manager) windowName(record *ServiceRecord) string {
@@ -640,7 +636,7 @@ func (m *Manager) lockOperation(key string) (func(), error) {
 
 func (m *Manager) CleanupSession() error {
 	if m.tmux.SessionExists() {
-		return exec.Command("tmux", "kill-session", "-t", m.config.TmuxSession).Run()
+		return exec.Command("tmux", "kill-session", "-t", m.runtime.Spec.TmuxSession).Run()
 	}
 	return nil
 }

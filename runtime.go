@@ -10,7 +10,7 @@ import (
 
 type RuntimeConfig struct {
 	ConfigPath string            `json:"config_path,omitempty"`
-	StateDir   string            `json:"state_dir,omitempty"`
+	RootDir    string            `json:"root_dir,omitempty"`
 	HomeDir    string            `json:"home_dir,omitempty"`
 	Env        map[string]string `json:"env,omitempty"`
 }

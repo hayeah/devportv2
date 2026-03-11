@@ -13,24 +13,40 @@ type ManagerIO struct {
 	Stderr io.Writer
 }
 
-func ProvidePaths(runtime RuntimeConfig) (Paths, error) {
-	return ResolvePathsWithRuntime(runtime)
+type Runtime struct {
+	Config RuntimeConfig
+	IO     ManagerIO
+	Paths  Paths
+	Spec   *Config
 }
 
-func ProvideConfig(paths Paths) (*Config, error) {
-	return LoadConfig(paths.Config)
+func ProvideRuntime(config RuntimeConfig, managerIO ManagerIO) (*Runtime, error) {
+	paths, err := ResolvePathsWithRuntime(config)
+	if err != nil {
+		return nil, err
+	}
+	spec, err := LoadConfig(paths.Config)
+	if err != nil {
+		return nil, err
+	}
+	return &Runtime{
+		Config: config,
+		IO:     managerIO,
+		Paths:  paths,
+		Spec:   spec,
+	}, nil
 }
 
-func ProvideStore(paths Paths) (*Store, error) {
-	return OpenStore(paths.DB)
+func ProvideStore(runtime *Runtime) (*Store, error) {
+	return OpenStore(runtime.Paths.DB)
 }
 
 func ProvideExecutable() (string, error) {
 	return os.Executable()
 }
 
-func ProvideTmux(config *Config) *Tmux {
-	return NewTmux(config.TmuxSession)
+func ProvideTmux(runtime *Runtime) *Tmux {
+	return NewTmux(runtime.Spec.TmuxSession)
 }
 
 func ProvideManagerLogger() *slog.Logger {
@@ -38,10 +54,7 @@ func ProvideManagerLogger() *slog.Logger {
 }
 
 func NewManagerFromDeps(
-	runtime RuntimeConfig,
-	managerIO ManagerIO,
-	paths Paths,
-	config *Config,
+	runtime *Runtime,
 	store *Store,
 	tmux *Tmux,
 	log *slog.Logger,
@@ -49,13 +62,9 @@ func NewManagerFromDeps(
 ) *Manager {
 	return &Manager{
 		runtime:    runtime,
-		paths:      paths,
-		config:     config,
 		store:      store,
 		tmux:       tmux,
 		log:        log,
-		stdout:     managerIO.Stdout,
-		stderr:     managerIO.Stderr,
 		executable: executable,
 	}
 }

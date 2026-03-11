@@ -17,33 +17,28 @@ import (
 // Injectors from wire.go:
 
 func InitializeManager(runtime RuntimeConfig, managerIO ManagerIO) (*Manager, error) {
-	paths, err := ProvidePaths(runtime)
+	runtime2, err := ProvideRuntime(runtime, managerIO)
 	if err != nil {
 		return nil, err
 	}
-	config, err := ProvideConfig(paths)
+	store, err := ProvideStore(runtime2)
 	if err != nil {
 		return nil, err
 	}
-	store, err := ProvideStore(paths)
-	if err != nil {
-		return nil, err
-	}
-	tmux := ProvideTmux(config)
+	tmux := ProvideTmux(runtime2)
 	logger := ProvideManagerLogger()
 	string2, err := ProvideExecutable()
 	if err != nil {
 		return nil, err
 	}
-	manager := NewManagerFromDeps(runtime, managerIO, paths, config, store, tmux, logger, string2)
+	manager := NewManagerFromDeps(runtime2, store, tmux, logger, string2)
 	return manager, nil
 }
 
 // wire.go:
 
 var ManagerProviderSet = wire.NewSet(
-	ProvidePaths,
-	ProvideConfig,
+	ProvideRuntime,
 	ProvideStore,
 	ProvideExecutable,
 	ProvideTmux,

@@ -19,7 +19,7 @@ type e2eHarness struct {
 	t          *testing.T
 	root       string
 	home       string
-	stateDir   string
+	rootDir    string
 	binDir     string
 	devportBin string
 	serviceBin string
@@ -380,13 +380,13 @@ func newHarness(t *testing.T) *e2eHarness {
 	}
 	tempDir := t.TempDir()
 	home := filepath.Join(tempDir, "home")
-	stateDir := filepath.Join(tempDir, "state")
+	rootDir := filepath.Join(tempDir, "state")
 	binDir := filepath.Join(tempDir, "bin")
 	if err := os.MkdirAll(home, 0o755); err != nil {
 		t.Fatalf("mkdir home: %v", err)
 	}
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
-		t.Fatalf("mkdir state dir: %v", err)
+	if err := os.MkdirAll(rootDir, 0o755); err != nil {
+		t.Fatalf("mkdir root dir: %v", err)
 	}
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatalf("mkdir bin: %v", err)
@@ -401,7 +401,7 @@ func newHarness(t *testing.T) *e2eHarness {
 		t:          t,
 		root:       root,
 		home:       home,
-		stateDir:   stateDir,
+		rootDir:    rootDir,
 		binDir:     binDir,
 		devportBin: devportBin,
 		serviceBin: serviceBin,
@@ -441,7 +441,7 @@ func (h *e2eHarness) runtimeJSON() string {
 
 	value, err := devport.RuntimeConfig{
 		HomeDir:    h.home,
-		StateDir:   h.stateDir,
+		RootDir:    h.rootDir,
 		ConfigPath: h.configPath,
 	}.MarshalJSONValue()
 	if err != nil {
@@ -452,12 +452,12 @@ func (h *e2eHarness) runtimeJSON() string {
 
 func (h *e2eHarness) dbPath() string {
 	h.t.Helper()
-	return filepath.Join(h.stateDir, "devport.db")
+	return filepath.Join(h.rootDir, "devport.db")
 }
 
 func (h *e2eHarness) lockPath(window string) string {
 	h.t.Helper()
-	return filepath.Join(h.stateDir, "locks", window+".lock")
+	return filepath.Join(h.rootDir, "locks", window+".lock")
 }
 
 func (h *e2eHarness) runOK(args ...string) string {

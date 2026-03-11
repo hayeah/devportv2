@@ -30,16 +30,16 @@ type supervisedChild struct {
 }
 
 func NewSupervisor(ctx context.Context, manager *Manager, key string) (*Supervisor, error) {
-	service, err := manager.config.Service(key)
+	service, err := manager.runtime.Spec.Service(key)
 	if err != nil {
 		return nil, err
 	}
 
-	env, err := LoadEnvironmentWithRuntime(service, manager.runtime)
+	env, err := LoadEnvironmentWithRuntime(service, manager.runtime.Config)
 	if err != nil {
 		return nil, err
 	}
-	cwd, err := manager.runtime.ExpandPath(service.CWD)
+	cwd, err := manager.runtime.Config.ExpandPath(service.CWD)
 	if err != nil {
 		return nil, err
 	}

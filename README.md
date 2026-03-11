@@ -12,7 +12,7 @@ All services are declared in one TOML spec file. No ad-hoc unnamed services, no 
 ## Config File
 
 Default location: `~/.config/devport/devport.toml`
-Override with `--file <path>` or `DEVPORT_CONFIG` env var.
+Override with `--file <path>`. To relocate both config and state together, set `DEVPORT_ROOT`.
 
 ```toml
 version = 2
@@ -215,7 +215,7 @@ Drift is reported separately from status — a service can be `running` but drif
 - SQLite database: `~/.local/share/devport/devport.db` (WAL mode)
 - Structured log: `~/.local/log/devport.jsonl`
 - Lock files: `~/.local/share/devport/locks/`
-- Override state dir with `DEVPORT_STATE_DIR`
+- Set `DEVPORT_ROOT` to place `devport.toml`, `devport.db`, and `locks/` under one directory
 
 ### SQLite Database
 

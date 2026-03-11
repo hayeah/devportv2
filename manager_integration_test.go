@@ -85,7 +85,7 @@ startup_timeout = "5s"
 	var stderr bytes.Buffer
 	manager, err := NewManagerWithRuntime(RuntimeConfig{
 		HomeDir:    home,
-		StateDir:   stateDir,
+		RootDir:    stateDir,
 		ConfigPath: configPath,
 		Env: map[string]string{
 			"PATH": binDir + ":" + os.Getenv("PATH"),

@@ -39,19 +39,19 @@ func resolveConfigPath(runtime RuntimeConfig) (string, error) {
 	switch {
 	case strings.TrimSpace(runtime.ConfigPath) != "":
 		return runtime.ExpandPath(runtime.ConfigPath)
-	case lookupNonEmpty(runtime, "DEVPORT_CONFIG") != "":
-		value := lookupNonEmpty(runtime, "DEVPORT_CONFIG")
-		return runtime.ExpandPath(value)
+	case lookupNonEmpty(runtime, "DEVPORT_ROOT") != "":
+		root := lookupNonEmpty(runtime, "DEVPORT_ROOT")
+		return runtime.ExpandPath(filepath.Join(root, "devport.toml"))
 	default:
 		return runtime.ExpandPath("~/.config/devport/devport.toml")
 	}
 }
 
 func resolveStateDir(runtime RuntimeConfig) (string, error) {
-	if strings.TrimSpace(runtime.StateDir) != "" {
-		return runtime.ExpandPath(runtime.StateDir)
+	if strings.TrimSpace(runtime.RootDir) != "" {
+		return runtime.ExpandPath(runtime.RootDir)
 	}
-	if value := lookupNonEmpty(runtime, "DEVPORT_STATE_DIR"); value != "" {
+	if value := lookupNonEmpty(runtime, "DEVPORT_ROOT"); value != "" {
 		return runtime.ExpandPath(value)
 	}
 	return runtime.ExpandPath("~/.local/share/devport")

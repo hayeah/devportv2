@@ -5,8 +5,7 @@ package devport
 import "github.com/google/wire"
 
 var ManagerProviderSet = wire.NewSet(
-	ProvidePaths,
-	ProvideConfig,
+	ProvideRuntime,
 	ProvideStore,
 	ProvideExecutable,
 	ProvideTmux,
