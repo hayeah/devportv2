@@ -43,6 +43,8 @@ type StatusView struct {
 	LastError     string   `json:"last_error,omitempty"`
 	LastExitCode  int      `json:"last_exit_code,omitempty"`
 	LastReason    string   `json:"last_reason,omitempty"`
+	LastChecked   string   `json:"last_checked,omitempty"`
+	CheckDuration int64    `json:"check_duration_ms,omitempty"`
 }
 
 type IngressDocument struct {
@@ -454,6 +456,7 @@ func (m *Manager) Status(ctx context.Context, keys []string) ([]StatusView, erro
 			healthValue = "stopped"
 		} else if view.Status == "failed" && !lockHeld {
 			healthValue = "unhealthy"
+			view.LastChecked = nowUTC()
 			if err := m.store.SaveHealth(ctx, HealthRecord{
 				Key:        key,
 				CheckType:  service.Health.Type,
@@ -485,6 +488,8 @@ func (m *Manager) Status(ctx context.Context, keys []string) ([]StatusView, erro
 			} else {
 				view.Drift = append(view.Drift, "health check failing")
 			}
+			view.LastChecked = nowUTC()
+			view.CheckDuration = result.Duration.Milliseconds()
 			if err := m.store.SaveHealth(ctx, HealthRecord{
 				Key:        key,
 				CheckType:  service.Health.Type,
@@ -519,13 +524,21 @@ func (m *Manager) PrintStatus(statuses []StatusView, diffOnly bool) error {
 		return nil
 	}
 
-	fmt.Fprintln(writer, "KEY\tSTATUS\tHEALTH\tPID\tPORT\tDRIFT")
+	fmt.Fprintln(writer, "KEY\tSTATUS\tHEALTH\tPID\tPORT\tRESTARTS\tCHECK\tDRIFT")
 	for _, status := range statuses {
 		drift := "-"
 		if len(status.Drift) > 0 {
 			drift = strings.Join(status.Drift, ", ")
 		}
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%d\t%d\t%s\n", status.Key, status.Status, status.Health, status.PID, status.Port, drift)
+		check := "-"
+		if status.LastChecked != "" {
+			check = fmt.Sprintf("%dms ago", status.CheckDuration)
+			if t, err := time.Parse(time.RFC3339Nano, status.LastChecked); err == nil {
+				ago := time.Since(t).Truncate(time.Second)
+				check = fmt.Sprintf("%dms (%s ago)", status.CheckDuration, ago)
+			}
+		}
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\n", status.Key, status.Status, status.Health, status.PID, status.Port, status.RestartCount, check, drift)
 	}
 	return nil
 }
