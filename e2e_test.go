@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -114,7 +115,7 @@ startup_timeout = "5s"
 		}
 	})
 
-	t.Run("restart_changes_pid_and_counter", func(t *testing.T) {
+	t.Run("restart_increments_counter_and_fresh_start_resets_it", func(t *testing.T) {
 		h := newHarness(t)
 		h.writeConfig(fmt.Sprintf(`
 version = 2
@@ -151,13 +152,81 @@ startup_timeout = "10s"
 		if second.RestartCount != 1 {
 			t.Fatalf("expected restart_count=1, got %d", second.RestartCount)
 		}
+
+		h.runOK("stop", "--file", h.configPath, "--key", "app/web")
+		h.runOK("start", "--file", h.configPath, "--key", "app/web")
+		third := h.findStatus("app/web")
+		if third.PID == 0 {
+			t.Fatalf("expected PID to be recorded after fresh start")
+		}
+		if third.RestartCount != 0 {
+			t.Fatalf("expected restart_count to reset after start, got %d", third.RestartCount)
+		}
+	})
+
+	t.Run("up_resets_counter_after_failed_lifecycle", func(t *testing.T) {
+		h := newHarness(t)
+		h.writeConfig(fmt.Sprintf(`
+version = 2
+port_range = { start = 19190, end = 19199 }
+tmux_session = %q
+
+[service."app/web"]
+cwd = %q
+command = [%q, "http", "--port", "${PORT}", "--message", "recover-me"]
+port = 19190
+restart = "never"
+
+[service."app/web".health]
+type = "http"
+url = "http://127.0.0.1:${PORT}/"
+expect_status = [200]
+startup_timeout = "10s"
+`, h.session, h.root, h.serviceBin))
+
+		h.runOK("start", "--file", h.configPath, "--key", "app/web")
+		h.runOK("restart", "--file", h.configPath, "--key", "app/web")
+		restarted := h.findStatus("app/web")
+		if restarted.RestartCount != 1 {
+			t.Fatalf("expected restart_count=1 before recovery, got %d", restarted.RestartCount)
+		}
+
+		if err := syscall.Kill(restarted.SupervisorPID, syscall.SIGKILL); err != nil {
+			t.Fatalf("kill supervisor: %v", err)
+		}
+
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			status := h.findStatus("app/web")
+			if status.Status == "failed" {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+
+		failed := h.findStatus("app/web")
+		if failed.Status != "failed" {
+			t.Fatalf("expected failed status before recovery, got %+v", failed)
+		}
+		if failed.RestartCount != 1 {
+			t.Fatalf("expected restart_count to remain 1 before Up recovery, got %d", failed.RestartCount)
+		}
+
+		h.runOK("up", "--file", h.configPath, "--key", "app/web")
+		recovered := h.findStatus("app/web")
+		if recovered.Status != "running" || recovered.PID == 0 {
+			t.Fatalf("expected running status after Up recovery, got %+v", recovered)
+		}
+		if recovered.RestartCount != 0 {
+			t.Fatalf("expected restart_count to reset after Up, got %d", recovered.RestartCount)
+		}
 	})
 
 	t.Run("failed_start_records_failed_status", func(t *testing.T) {
 		h := newHarness(t)
 		h.writeConfig(fmt.Sprintf(`
 version = 2
-port_range = { start = 19190, end = 19199 }
+port_range = { start = 19200, end = 19209 }
 tmux_session = %q
 
 [service."app/fail"]
@@ -197,13 +266,13 @@ startup_timeout = "3s"
 		h := newHarness(t)
 		h.writeConfig(fmt.Sprintf(`
 version = 2
-port_range = { start = 19200, end = 19209 }
+port_range = { start = 19210, end = 19219 }
 tmux_session = %q
 
 [service."app/web"]
 cwd = %q
 command = [%q, "http", "--port", "${PORT}", "--message", "drift-v1"]
-port = 19200
+port = 19210
 restart = "never"
 
 [service."app/web".health]
@@ -217,13 +286,13 @@ startup_timeout = "10s"
 
 		h.writeConfig(fmt.Sprintf(`
 version = 2
-port_range = { start = 19200, end = 19209 }
+port_range = { start = 19210, end = 19219 }
 tmux_session = %q
 
 [service."app/web"]
 cwd = %q
 command = [%q, "http", "--port", "${PORT}", "--message", "drift-v2"]
-port = 19201
+port = 19211
 restart = "never"
 
 [service."app/web".health]
@@ -244,7 +313,7 @@ startup_timeout = "10s"
 
 	t.Run("freeport_skips_spec_ports_and_live_listener", func(t *testing.T) {
 		h := newHarness(t)
-		listener, err := net.Listen("tcp", "127.0.0.1:19211")
+		listener, err := net.Listen("tcp", "127.0.0.1:19221")
 		if err != nil {
 			t.Fatalf("listen: %v", err)
 		}
@@ -252,13 +321,13 @@ startup_timeout = "10s"
 
 		h.writeConfig(fmt.Sprintf(`
 version = 2
-port_range = { start = 19210, end = 19212 }
+port_range = { start = 19220, end = 19222 }
 tmux_session = %q
 
 [service."app/web"]
 cwd = %q
 command = [%q, "http", "--port", "${PORT}", "--message", "port-check"]
-port = 19210
+port = 19220
 restart = "never"
 
 [service."app/web".health]
@@ -269,8 +338,8 @@ startup_timeout = "10s"
 `, h.session, h.root, h.serviceBin))
 
 		output := strings.TrimSpace(h.runOK("freeport", "--file", h.configPath))
-		if output != "19212" {
-			t.Fatalf("expected free port 19212, got %s", output)
+		if output != "19222" {
+			t.Fatalf("expected free port 19222, got %s", output)
 		}
 	})
 }

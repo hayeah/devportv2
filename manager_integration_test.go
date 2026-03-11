@@ -146,6 +146,21 @@ startup_timeout = "5s"
 	if err := manager.Start(ctx, "app/web", "test-start"); err != nil {
 		t.Fatalf("Start after stop: %v", err)
 	}
+	record = findServiceRecord(t, manager, "app/web")
+	if record.Status != "running" || record.PID == 0 {
+		t.Fatalf("expected running service after start, got %+v", record)
+	}
+	if record.RestartCount != 0 {
+		t.Fatalf("expected restart count reset after start, got %d", record.RestartCount)
+	}
+
+	if err := manager.Restart(ctx, "app/web"); err != nil {
+		t.Fatalf("Restart before Up recovery: %v", err)
+	}
+	record = findServiceRecord(t, manager, "app/web")
+	if record.RestartCount != 1 {
+		t.Fatalf("expected restart count to increment before Up recovery, got %d", record.RestartCount)
+	}
 
 	record = findServiceRecord(t, manager, "app/web")
 	if err := syscall.Kill(record.SupervisorPID, syscall.SIGKILL); err != nil {
@@ -172,6 +187,9 @@ startup_timeout = "5s"
 	restarted := findServiceRecord(t, manager, "app/web")
 	if restarted.Status != "running" || restarted.PID == 0 {
 		t.Fatalf("expected running service after recovery, got %+v", restarted)
+	}
+	if restarted.RestartCount != 0 {
+		t.Fatalf("expected restart count reset after Up, got %d", restarted.RestartCount)
 	}
 
 	if err := manager.Stop(ctx, "app/web", "prepare-concurrent-start"); err != nil {
