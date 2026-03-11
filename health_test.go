@@ -84,6 +84,87 @@ func TestPortChecksSupportIPv6Loopback(t *testing.T) {
 	}
 }
 
+func TestProbeHealthHTTPPathOnly(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			writer.WriteHeader(http.StatusOK)
+		}),
+	}
+	defer server.Close()
+	go server.Serve(listener)
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	result := ProbeHealth(context.Background(), ServiceSpec{
+		Port: port,
+		Health: HealthSpec{
+			Type:         "http",
+			URL:          "/",
+			ExpectStatus: []int{200},
+		},
+	}, Environment{values: map[string]string{}}, t.TempDir(), func() bool { return true })
+	if !result.Healthy {
+		t.Fatalf("expected path-only health check to pass: %+v", result)
+	}
+
+	resultPath := ProbeHealth(context.Background(), ServiceSpec{
+		Port: port,
+		Health: HealthSpec{
+			Type:         "http",
+			URL:          "/healthz",
+			ExpectStatus: []int{200},
+		},
+	}, Environment{values: map[string]string{}}, t.TempDir(), func() bool { return true })
+	if !resultPath.Healthy {
+		t.Fatalf("expected path-only /healthz health check to pass: %+v", resultPath)
+	}
+}
+
+func TestProbeHealthHTTPPathOnlyIPv6(t *testing.T) {
+	listener := listenIPv6Loopback(t)
+	defer listener.Close()
+
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			writer.WriteHeader(http.StatusOK)
+		}),
+	}
+	defer server.Close()
+	go server.Serve(listener)
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	result := ProbeHealth(context.Background(), ServiceSpec{
+		Port: port,
+		Health: HealthSpec{
+			Type:         "http",
+			URL:          "/",
+			ExpectStatus: []int{200},
+		},
+	}, Environment{values: map[string]string{}}, t.TempDir(), func() bool { return true })
+	if !result.Healthy {
+		t.Fatalf("expected path-only health check to pass for IPv6 listener: %+v", result)
+	}
+}
+
+func TestResolveHealthURL(t *testing.T) {
+	env := Environment{values: map[string]string{"APP_PORT": "19005"}}
+
+	if got := resolveHealthURL("/", env, 19005); got != "http://localhost:19005/" {
+		t.Fatalf("expected http://localhost:19005/, got %q", got)
+	}
+	if got := resolveHealthURL("/healthz", env, 8080); got != "http://localhost:8080/healthz" {
+		t.Fatalf("expected http://localhost:8080/healthz, got %q", got)
+	}
+	if got := resolveHealthURL("http://127.0.0.1:${APP_PORT}/", env, 19005); got != "http://127.0.0.1:19005/" {
+		t.Fatalf("expected http://127.0.0.1:19005/, got %q", got)
+	}
+}
+
 func TestProbeHealthHTTPSupportsIPv6Loopback(t *testing.T) {
 	listener := listenIPv6Loopback(t)
 	defer listener.Close()

@@ -69,9 +69,10 @@ func ProbeHealth(ctx context.Context, service ServiceSpec, env Environment, cwd 
 		if service.Port > 0 && !portListening(service.Port) {
 			return HealthResult{Healthy: false, Detail: "port not listening", Duration: time.Since(started)}
 		}
+		healthURL := resolveHealthURL(service.Health.URL, env, service.Port)
 		requestContext, cancel := withDefaultTimeout(ctx, defaultHTTPHealthTimeout)
 		defer cancel()
-		request, err := http.NewRequestWithContext(requestContext, http.MethodGet, env.ExpandString(service.Health.URL), nil)
+		request, err := http.NewRequestWithContext(requestContext, http.MethodGet, healthURL, nil)
 		if err != nil {
 			return HealthResult{Healthy: false, Detail: truncateHealthDetail(err.Error()), Duration: time.Since(started)}
 		}
@@ -105,6 +106,14 @@ func ProbeHealth(ctx context.Context, service ServiceSpec, env Environment, cwd 
 	default:
 		return HealthResult{Healthy: false, Detail: fmt.Sprintf("unsupported health type %s", service.Health.Type), Duration: time.Since(started)}
 	}
+}
+
+func resolveHealthURL(raw string, env Environment, port int) string {
+	expanded := env.ExpandString(raw)
+	if strings.HasPrefix(expanded, "/") {
+		return fmt.Sprintf("http://localhost:%d%s", port, expanded)
+	}
+	return expanded
 }
 
 func portListening(port int) bool {

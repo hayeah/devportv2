@@ -29,7 +29,7 @@ restart = "never"
 
 [service."app/web".health]
 type = "http"
-url = "http://127.0.0.1:${APP_PORT}/healthz"
+url = "/healthz"
 expect_status = [200]
 startup_timeout = "10s"
 
@@ -62,7 +62,7 @@ startup_timeout = "5s"
 ### Health check types
 
 - `process` — just check if the process is alive
-- `http` — HTTP GET with expected status codes (default `[200]`)
+- `http` — HTTP GET with expected status codes (default `[200]`). URL can be a path like `"/"` which resolves to `http://localhost:PORT/` (tries both IPv4 and IPv6)
 - `command` — run an arbitrary command, must exit 0
 - `none` — no health checking
 
