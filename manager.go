@@ -108,7 +108,8 @@ func (m *Manager) startLocked(ctx context.Context, key, cause string) error {
 	if err != nil {
 		return err
 	}
-	if err := ensurePortAvailable(service.Port); err != nil {
+	record, err := m.store.Service(ctx, key)
+	if err != nil {
 		return err
 	}
 
@@ -118,6 +119,36 @@ func (m *Manager) startLocked(ctx context.Context, key, cause string) error {
 	}
 	if lockHeld {
 		return fmt.Errorf("service %q is already running", key)
+	}
+	if record != nil && record.PID > 0 && processAlive(record.PID) {
+		if err := terminateProcessGroup(record.PID, gracefulStopTimeout); err != nil {
+			return fmt.Errorf("clean up stale process for %q: %w", key, err)
+		}
+		_ = m.tmux.KillWindow(m.windowName(record))
+		record.Status = "failed"
+		record.PID = 0
+		record.SupervisorPID = 0
+		record.LastExitReason = "stale_process_reaped"
+		if record.LastError == "" {
+			record.LastError = "stale process reaped before start"
+		}
+		record.StoppedAt = nowUTC()
+		if err := m.store.UpsertService(ctx, *record); err != nil {
+			return err
+		}
+	}
+	if record != nil {
+		record.Status = "stopped"
+		record.PID = 0
+		record.SupervisorPID = 0
+		record.LastError = ""
+		record.StoppedAt = nowUTC()
+		if err := m.store.UpsertService(ctx, *record); err != nil {
+			return err
+		}
+	}
+	if err := ensurePortAvailable(service.Port); err != nil {
+		return err
 	}
 
 	window := m.tmux.WindowName(key)
@@ -206,6 +237,11 @@ func (m *Manager) stopLocked(ctx context.Context, key, reason string) error {
 			time.Sleep(200 * time.Millisecond)
 		}
 	}
+	if record.PID > 0 && processAlive(record.PID) {
+		if err := terminateProcessGroup(record.PID, gracefulStopTimeout); err != nil {
+			return err
+		}
+	}
 
 	if err := m.tmux.KillWindow(window); err != nil {
 		return err
@@ -255,6 +291,17 @@ func (m *Manager) Up(ctx context.Context, keys []string) error {
 
 	failures := []string{}
 	for _, key := range selected {
+		record, err := m.store.Service(ctx, key)
+		if err != nil {
+			return err
+		}
+		lockHeld, err := LockHeld(m.lockPath(key))
+		if err != nil {
+			return err
+		}
+		if record != nil && lockHeld && (record.Status == "running" || record.Status == "starting") {
+			continue
+		}
 		if err := m.Start(ctx, key, "up"); err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", key, err))
 		}
@@ -377,7 +424,20 @@ func (m *Manager) Status(ctx context.Context, keys []string) ([]StatusView, erro
 			return nil, err
 		}
 		if (view.Status == "running" || view.Status == "starting") && !lockHeld {
+			view.Status = "failed"
 			view.Drift = append(view.Drift, "supervisor lock not held")
+			if record != nil {
+				record.Status = "failed"
+				record.SupervisorPID = 0
+				if record.LastError == "" {
+					record.LastError = "supervisor lock not held"
+				}
+				record.LastExitReason = "supervisor_missing"
+				record.StoppedAt = nowUTC()
+				if err := m.store.UpsertService(ctx, *record); err != nil {
+					return nil, err
+				}
+			}
 		}
 		if view.Port > 0 && (view.Status == "running" || view.Status == "starting") && !portListening(view.Port) {
 			view.Drift = append(view.Drift, "port not listening")
@@ -389,6 +449,17 @@ func (m *Manager) Status(ctx context.Context, keys []string) ([]StatusView, erro
 		healthValue := "unknown"
 		if view.Status == "stopped" {
 			healthValue = "stopped"
+		} else if view.Status == "failed" && !lockHeld {
+			healthValue = "unhealthy"
+			if err := m.store.SaveHealth(ctx, HealthRecord{
+				Key:        key,
+				CheckType:  service.Health.Type,
+				Healthy:    false,
+				Detail:     "supervisor lock not held",
+				DurationMS: 0,
+			}); err != nil {
+				return nil, err
+			}
 		} else {
 			env, err := LoadEnvironment(service)
 			if err != nil {
@@ -470,6 +541,16 @@ func (m *Manager) lockPath(key string) string {
 
 func (m *Manager) operationLockPath(key string) string {
 	return m.paths.Locks + "/" + m.tmux.WindowName(key) + ".op.lock"
+}
+
+func (m *Manager) windowName(record *ServiceRecord) string {
+	if record != nil && record.TmuxWindow != "" {
+		return record.TmuxWindow
+	}
+	if record != nil {
+		return m.tmux.WindowName(record.Key)
+	}
+	return ""
 }
 
 func (m *Manager) lockOperation(key string) (func(), error) {

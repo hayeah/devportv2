@@ -24,14 +24,15 @@ type e2eHarness struct {
 }
 
 type statusView struct {
-	Key          string   `json:"key"`
-	Status       string   `json:"status"`
-	Health       string   `json:"health"`
-	PID          int      `json:"pid"`
-	RestartCount int      `json:"restart_count"`
-	Port         int      `json:"port"`
-	Drift        []string `json:"drift"`
-	LastError    string   `json:"last_error"`
+	Key           string   `json:"key"`
+	Status        string   `json:"status"`
+	Health        string   `json:"health"`
+	PID           int      `json:"pid"`
+	SupervisorPID int      `json:"supervisor_pid"`
+	RestartCount  int      `json:"restart_count"`
+	Port          int      `json:"port"`
+	Drift         []string `json:"drift"`
+	LastError     string   `json:"last_error"`
 }
 
 func TestEndToEnd(t *testing.T) {

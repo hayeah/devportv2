@@ -5,11 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -41,16 +43,17 @@ func TestManagerLifecycleWithTmux(t *testing.T) {
 	buildTestBinary(t, serviceBin, "./internal/testbin/testservice")
 
 	session := fmt.Sprintf("devport-int-%d", time.Now().UnixNano())
+	portRangeStart, webPort, _ := reserveIntegrationTCPPortRange(t, 10)
 	configPath := filepath.Join(home, ".config", "devport", "devport.toml")
 	configText := fmt.Sprintf(`
 version = 2
-port_range = { start = 19400, end = 19409 }
+port_range = { start = %d, end = %d }
 tmux_session = %q
 
 [service."app/web"]
 cwd = %q
 command = [%q, "http", "--port", "${PORT}", "--message", "integration"]
-port = 19400
+port = %d
 restart = "never"
 
 [service."app/web".health]
@@ -68,7 +71,7 @@ restart = "never"
 [service."jobs/worker".health]
 type = "process"
 startup_timeout = "5s"
-`, session, repoRoot, serviceBin, repoRoot, serviceBin)
+`, portRangeStart, portRangeStart+9, session, repoRoot, serviceBin, webPort, repoRoot, serviceBin)
 	if err := os.WriteFile(configPath, []byte(strings.TrimSpace(configText)+"\n"), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -155,6 +158,33 @@ startup_timeout = "5s"
 		t.Fatalf("Start after stop: %v", err)
 	}
 
+	record = findServiceRecord(t, manager, "app/web")
+	if err := syscall.Kill(record.SupervisorPID, syscall.SIGKILL); err != nil {
+		t.Fatalf("kill supervisor: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		statuses, err = manager.Status(ctx, []string{"app/web"})
+		if err != nil {
+			t.Fatalf("Status after supervisor kill: %v", err)
+		}
+		if findStatusByKey(t, statuses, "app/web").Status == "failed" {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	reconciled := findStatusByKey(t, statuses, "app/web")
+	if reconciled.Status != "failed" {
+		t.Fatalf("expected failed status after supervisor kill, got %+v", reconciled)
+	}
+	if err := manager.Up(ctx, []string{"app/web"}); err != nil {
+		t.Fatalf("Up after supervisor kill: %v", err)
+	}
+	restarted := findServiceRecord(t, manager, "app/web")
+	if restarted.Status != "running" || restarted.PID == 0 {
+		t.Fatalf("expected running service after recovery, got %+v", restarted)
+	}
+
 	if err := manager.Stop(ctx, "app/web", "prepare-concurrent-start"); err != nil {
 		t.Fatalf("Stop before concurrent start: %v", err)
 	}
@@ -204,6 +234,46 @@ func buildTestBinary(t *testing.T, output, target string) {
 	if out, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build %s: %v\n%s", target, err, string(out))
 	}
+}
+
+func reserveIntegrationTCPPortRange(t *testing.T, extra int) (int, int, int) {
+	t.Helper()
+
+	listeners := make([]net.Listener, 0, 2)
+	ports := make([]int, 0, 2)
+	for len(ports) < 2 {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("reserve tcp port: %v", err)
+		}
+		port := listener.Addr().(*net.TCPAddr).Port
+		duplicate := false
+		for _, existing := range ports {
+			if existing == port {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			_ = listener.Close()
+			continue
+		}
+		listeners = append(listeners, listener)
+		ports = append(ports, port)
+	}
+	for _, listener := range listeners {
+		_ = listener.Close()
+	}
+
+	start := min(ports[0], ports[1])
+	end := max(ports[0], ports[1]) + extra
+	if end > 65535 {
+		start -= end - 65535
+		if start < 1024 {
+			t.Fatalf("reserved port range overflow: start=%d end=%d", start, end)
+		}
+	}
+	return start, ports[0], ports[1]
 }
 
 func findStatusByKey(t *testing.T, statuses []StatusView, key string) StatusView {
