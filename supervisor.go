@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -25,8 +26,10 @@ type Supervisor struct {
 }
 
 type supervisedChild struct {
-	cmd    *exec.Cmd
-	waitCh chan error
+	cmd     *exec.Cmd
+	done    chan struct{}
+	waitErr error
+	waitMu  sync.Mutex
 }
 
 func NewSupervisor(ctx context.Context, manager *Manager, key string) (*Supervisor, error) {
@@ -110,8 +113,8 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		select {
 		case sig := <-signalCh:
 			return s.handleSignal(ctx, child, sig)
-		case waitErr := <-child.waitCh:
-			return s.handleExit(ctx, waitErr)
+		case <-child.done:
+			return s.handleExit(ctx, child.Wait())
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -136,11 +139,15 @@ func (s *Supervisor) startChild(ctx context.Context) (*supervisedChild, error) {
 	}
 
 	child := &supervisedChild{
-		cmd:    cmd,
-		waitCh: make(chan error, 1),
+		cmd:  cmd,
+		done: make(chan struct{}),
 	}
 	go func() {
-		child.waitCh <- cmd.Wait()
+		err := cmd.Wait()
+		child.waitMu.Lock()
+		child.waitErr = err
+		child.waitMu.Unlock()
+		close(child.done)
 	}()
 
 	s.record.PID = cmd.Process.Pid
@@ -156,24 +163,55 @@ func (s *Supervisor) waitUntilReady(ctx context.Context, child *supervisedChild)
 	readyContext, cancelReady := context.WithTimeout(ctx, s.service.Health.StartupTimeout.Duration()+time.Second)
 	defer cancelReady()
 
-	result, readyErr := WaitForStartup(readyContext, s.service, s.env, s.cwd, func() bool {
-		return processAlive(s.record.PID)
-	})
-	if readyErr != nil {
-		return s.failStartup(ctx, child, readyErr, result)
-	}
-	if err := s.persistHealth(ctx, result); err != nil {
-		return s.failAfterStart(ctx, child, err, "health_persist_failed")
-	}
+	timeout := s.service.Health.StartupTimeout.Duration()
+	deadline := time.Now().Add(timeout)
+	var healthySince time.Time
 
-	s.record.Status = "running"
-	s.record.LastError = ""
-	s.record.LastExitReason = ""
-	s.record.LastExitCode = 0
-	if err := s.persist(ctx); err != nil {
-		return s.failAfterStart(ctx, child, err, "state_persist_failed")
+	for {
+		if child.Exited() {
+			return s.failStartupExit(ctx, child.Wait())
+		}
+
+		result := ProbeHealth(readyContext, s.service, s.env, s.cwd, func() bool {
+			return processAlive(s.record.PID)
+		})
+		if result.Healthy {
+			if s.service.Health.Type == "process" {
+				if healthySince.IsZero() {
+					healthySince = time.Now()
+				}
+				if time.Since(healthySince) < processStabilizationWindow {
+					goto wait
+				}
+			}
+			if err := s.persistHealth(ctx, result); err != nil {
+				return s.failAfterStart(ctx, child, err, "health_persist_failed")
+			}
+
+			s.record.Status = "running"
+			s.record.LastError = ""
+			s.record.LastExitReason = ""
+			s.record.LastExitCode = 0
+			if err := s.persist(ctx); err != nil {
+				return s.failAfterStart(ctx, child, err, "state_persist_failed")
+			}
+			return nil
+		}
+
+		healthySince = time.Time{}
+		if time.Now().After(deadline) {
+			return s.failStartup(ctx, child, fmt.Errorf("startup timeout: %s", result.Detail), result)
+		}
+
+	wait:
+		select {
+		case <-readyContext.Done():
+			return s.failStartup(ctx, child, readyContext.Err(), HealthResult{Healthy: false, Detail: readyContext.Err().Error()})
+		case <-child.done:
+			return s.failStartupExit(ctx, child.Wait())
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
-	return nil
 }
 
 func (s *Supervisor) failBeforeStart(ctx context.Context, err error, reason string) error {
@@ -206,6 +244,27 @@ func (s *Supervisor) failStartup(ctx context.Context, child *supervisedChild, re
 	return readyErr
 }
 
+func (s *Supervisor) failStartupExit(ctx context.Context, waitErr error) error {
+	if waitErr == nil {
+		waitErr = errors.New("process exited before ready")
+	}
+	s.record.Status = "failed"
+	s.record.LastError = fmt.Sprintf("startup failed: %v", waitErr)
+	s.record.LastExitReason = "startup_failed"
+	s.record.LastExitCode = exitCode(waitErr)
+	s.record.StoppedAt = nowUTC()
+	s.resetPIDs()
+	_ = s.persistHealth(ctx, HealthResult{
+		Healthy:  false,
+		Detail:   "process exited before ready",
+		Duration: 0,
+	})
+	_ = s.persist(ctx)
+	_ = s.manager.store.RecordEvent(ctx, s.service.Key, "error", "service_failed", map[string]any{"error": s.record.LastError, "exit_code": s.record.LastExitCode})
+	s.log.Error("service_failed", "error", s.record.LastError, "exit_code", s.record.LastExitCode)
+	return errors.New(s.record.LastError)
+}
+
 func (s *Supervisor) failAfterStart(ctx context.Context, child *supervisedChild, err error, reason string) error {
 	s.record.Status = "failed"
 	s.record.LastError = err.Error()
@@ -226,7 +285,7 @@ func (s *Supervisor) handleSignal(ctx context.Context, child *supervisedChild, s
 		s.record.Status = "failed"
 		s.record.LastError = err.Error()
 	}
-	waitErr := <-child.waitCh
+	waitErr := child.Wait()
 	s.record.LastExitCode = exitCode(waitErr)
 	s.resetPIDs()
 	_ = s.persist(ctx)
@@ -236,10 +295,20 @@ func (s *Supervisor) handleSignal(ctx context.Context, child *supervisedChild, s
 }
 
 func (s *Supervisor) handleExit(ctx context.Context, waitErr error) error {
+	wasStarting := s.record.Status == "starting"
 	s.record.StoppedAt = nowUTC()
 	s.record.LastExitCode = exitCode(waitErr)
 	s.resetPIDs()
 	if waitErr == nil {
+		if wasStarting {
+			s.record.Status = "failed"
+			s.record.LastExitReason = "startup_failed"
+			s.record.LastError = "startup failed: process exited before ready"
+			_ = s.persist(ctx)
+			_ = s.manager.store.RecordEvent(ctx, s.service.Key, "error", "service_failed", map[string]any{"error": s.record.LastError, "exit_code": s.record.LastExitCode})
+			s.log.Error("service_failed", "error", s.record.LastError, "exit_code", s.record.LastExitCode)
+			return errors.New(s.record.LastError)
+		}
 		s.record.Status = "stopped"
 		s.record.LastExitReason = "exited"
 		s.record.LastError = ""
@@ -251,9 +320,13 @@ func (s *Supervisor) handleExit(ctx context.Context, waitErr error) error {
 	s.record.Status = "failed"
 	s.record.LastExitReason = "exited"
 	s.record.LastError = waitErr.Error()
+	if wasStarting {
+		s.record.LastExitReason = "startup_failed"
+		s.record.LastError = fmt.Sprintf("startup failed: %v", waitErr)
+	}
 	_ = s.persist(ctx)
-	_ = s.manager.store.RecordEvent(ctx, s.service.Key, "error", "service_failed", map[string]any{"error": waitErr.Error(), "exit_code": s.record.LastExitCode})
-	s.log.Error("service_failed", "error", waitErr, "exit_code", s.record.LastExitCode)
+	_ = s.manager.store.RecordEvent(ctx, s.service.Key, "error", "service_failed", map[string]any{"error": s.record.LastError, "exit_code": s.record.LastExitCode})
+	s.log.Error("service_failed", "error", s.record.LastError, "exit_code", s.record.LastExitCode)
 	return waitErr
 }
 
@@ -271,10 +344,26 @@ func (s *Supervisor) stopChild(child *supervisedChild) error {
 	if err := terminateProcessGroup(child.cmd.Process.Pid, gracefulStopTimeout); err != nil {
 		return err
 	}
-	if waitErr := <-child.waitCh; waitErr != nil {
+	if waitErr := child.Wait(); waitErr != nil {
 		s.record.LastExitCode = exitCode(waitErr)
 	}
 	return nil
+}
+
+func (c *supervisedChild) Exited() bool {
+	select {
+	case <-c.done:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *supervisedChild) Wait() error {
+	<-c.done
+	c.waitMu.Lock()
+	defer c.waitMu.Unlock()
+	return c.waitErr
 }
 
 func (s *Supervisor) resetPIDs() {
