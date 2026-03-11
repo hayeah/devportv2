@@ -126,9 +126,17 @@ func (m *Manager) startLocked(ctx context.Context, key, cause string) error {
 		return err
 	}
 
-	deadline := time.Now().Add(service.Health.StartupTimeout.Duration() + 3*time.Second)
+	return m.waitForStart(ctx, key, service.Health.StartupTimeout.Duration()+3*time.Second)
+}
+
+func (m *Manager) waitForStart(ctx context.Context, key string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		record, err := m.store.Service(ctx, key)
+		if err != nil {
+			return err
+		}
+		lockHeld, err := LockHeld(m.lockPath(key))
 		if err != nil {
 			return err
 		}
@@ -141,6 +149,13 @@ func (m *Manager) startLocked(ctx context.Context, key, cause string) error {
 					return errors.New(record.LastError)
 				}
 				return fmt.Errorf("service %q failed to start", key)
+			case "starting":
+				if !lockHeld {
+					if record.LastError != "" {
+						return errors.New(record.LastError)
+					}
+					return fmt.Errorf("service %q failed during startup", key)
+				}
 			}
 		}
 		time.Sleep(200 * time.Millisecond)

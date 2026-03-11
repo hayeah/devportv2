@@ -123,3 +123,43 @@ func TestProbeHealthCommandTruncatesDetail(t *testing.T) {
 		t.Fatalf("expected truncated detail, got len=%d", len(result.Detail))
 	}
 }
+
+func TestProbeHealthHTTPUsesCallerDeadline(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			time.Sleep(4 * time.Second)
+			writer.WriteHeader(http.StatusOK)
+		}),
+	}
+	defer server.Close()
+	go server.Serve(listener)
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	service := ServiceSpec{
+		Port: port,
+		Health: HealthSpec{
+			Type:         "http",
+			URL:          "http://127.0.0.1:${PORT}/",
+			ExpectStatus: []int{200},
+		},
+	}
+	env := Environment{values: map[string]string{"PORT": fmt.Sprintf("%d", port)}}
+
+	backgroundResult := ProbeHealth(context.Background(), service, env, t.TempDir(), func() bool { return true })
+	if backgroundResult.Healthy {
+		t.Fatalf("expected background probe to hit default timeout")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	deadlineResult := ProbeHealth(ctx, service, env, t.TempDir(), func() bool { return true })
+	if !deadlineResult.Healthy {
+		t.Fatalf("expected deadline-bound probe to succeed, got %+v", deadlineResult)
+	}
+}

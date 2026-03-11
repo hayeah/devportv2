@@ -158,8 +158,17 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		Detail:     result.Detail,
 		DurationMS: result.Duration.Milliseconds(),
 	}); err != nil {
+		s.record.Status = "failed"
+		s.record.LastError = err.Error()
+		s.record.LastExitReason = "health_persist_failed"
+		s.record.LastExitCode = 0
 		_ = terminateProcessGroup(child.Process.Pid, gracefulStopTimeout)
-		<-waitCh
+		if waitErr := <-waitCh; waitErr != nil {
+			s.record.LastExitCode = exitCode(waitErr)
+		}
+		s.record.PID = 0
+		s.record.SupervisorPID = 0
+		_ = s.persist(ctx)
 		return err
 	}
 	s.record.Status = "running"
@@ -167,8 +176,16 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	s.record.LastExitReason = ""
 	s.record.LastExitCode = 0
 	if err := s.persist(ctx); err != nil {
+		s.record.Status = "failed"
+		s.record.LastError = err.Error()
+		s.record.LastExitReason = "state_persist_failed"
 		_ = terminateProcessGroup(child.Process.Pid, gracefulStopTimeout)
-		<-waitCh
+		if waitErr := <-waitCh; waitErr != nil {
+			s.record.LastExitCode = exitCode(waitErr)
+		}
+		s.record.PID = 0
+		s.record.SupervisorPID = 0
+		_ = s.persist(ctx)
 		return err
 	}
 	_ = s.manager.store.RecordEvent(ctx, s.service.Key, "info", "service_started", map[string]any{"pid": s.record.PID, "port": s.record.Port})

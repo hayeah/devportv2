@@ -68,11 +68,13 @@ func ProbeHealth(ctx context.Context, service ServiceSpec, env Environment, cwd 
 		if service.Port > 0 && !portListening(service.Port) {
 			return HealthResult{Healthy: false, Detail: "port not listening", Duration: time.Since(started)}
 		}
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, env.ExpandString(service.Health.URL), nil)
+		requestContext, cancel := withDefaultTimeout(ctx, defaultHTTPHealthTimeout)
+		defer cancel()
+		request, err := http.NewRequestWithContext(requestContext, http.MethodGet, env.ExpandString(service.Health.URL), nil)
 		if err != nil {
 			return HealthResult{Healthy: false, Detail: truncateHealthDetail(err.Error()), Duration: time.Since(started)}
 		}
-		client := &http.Client{Timeout: defaultHTTPHealthTimeout}
+		client := &http.Client{}
 		response, err := client.Do(request)
 		if err != nil {
 			return HealthResult{Healthy: false, Detail: truncateHealthDetail(err.Error()), Duration: time.Since(started)}
@@ -136,4 +138,11 @@ func truncateHealthDetail(value string) string {
 		return value
 	}
 	return value[:maxHealthDetailBytes] + "...(truncated)"
+}
+
+func withDefaultTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
 }

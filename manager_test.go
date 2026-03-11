@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestManagerHelpers(t *testing.T) {
@@ -101,6 +102,69 @@ hostname = "web.example.test"
 
 	if lockPath := manager.lockPath("app/web"); !strings.Contains(lockPath, "svc-") || !strings.HasSuffix(lockPath, ".lock") {
 		t.Fatalf("unexpected lock path: %s", lockPath)
+	}
+}
+
+func TestManagerWaitForStartFailsOnStaleStartingRecord(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	if err := os.MkdirAll(filepath.Join(home, ".config", "devport"), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+
+	configPath := filepath.Join(home, ".config", "devport", "devport.toml")
+	configText := `
+version = 2
+port_range = { start = 19310, end = 19312 }
+tmux_session = "devport-unit"
+
+[service."app/web"]
+cwd = "/tmp"
+command = ["web"]
+port = 19310
+restart = "never"
+
+[service."app/web".health]
+type = "none"
+`
+	if err := os.WriteFile(configPath, []byte(configText), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	oldHome := os.Getenv("HOME")
+	oldState := os.Getenv("DEVPORT_STATE_DIR")
+	t.Cleanup(func() {
+		_ = os.Setenv("HOME", oldHome)
+		_ = os.Setenv("DEVPORT_STATE_DIR", oldState)
+	})
+	if err := os.Setenv("HOME", home); err != nil {
+		t.Fatalf("set HOME: %v", err)
+	}
+	if err := os.Setenv("DEVPORT_STATE_DIR", filepath.Join(dir, "state")); err != nil {
+		t.Fatalf("set DEVPORT_STATE_DIR: %v", err)
+	}
+
+	manager, err := NewManager(configPath, &bytes.Buffer{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer manager.Close()
+
+	if err := manager.store.UpsertService(context.Background(), ServiceRecord{
+		Key:           "app/web",
+		Status:        "starting",
+		SpecHash:      "abc",
+		SupervisorPID: 99999,
+		Port:          19310,
+		TmuxWindow:    manager.tmux.WindowName("app/web"),
+		StartedAt:     nowUTC(),
+	}); err != nil {
+		t.Fatalf("UpsertService: %v", err)
+	}
+
+	err = manager.waitForStart(context.Background(), "app/web", 500*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), `service "app/web" failed during startup`) {
+		t.Fatalf("expected stale starting error, got %v", err)
 	}
 }
 
