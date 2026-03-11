@@ -71,6 +71,45 @@ func TestProbeHealthHTTPCommandAndProcess(t *testing.T) {
 	}
 }
 
+func TestPortChecksSupportIPv6Loopback(t *testing.T) {
+	listener := listenIPv6Loopback(t)
+	defer listener.Close()
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	if !portListening(port) {
+		t.Fatalf("expected portListening to detect IPv6 loopback listener on port %d", port)
+	}
+	if err := ensurePortAvailable(port); err == nil {
+		t.Fatalf("expected ensurePortAvailable to fail for IPv6 loopback listener on port %d", port)
+	}
+}
+
+func TestProbeHealthHTTPSupportsIPv6Loopback(t *testing.T) {
+	listener := listenIPv6Loopback(t)
+	defer listener.Close()
+
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			writer.WriteHeader(http.StatusNoContent)
+		}),
+	}
+	defer server.Close()
+	go server.Serve(listener)
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	result := ProbeHealth(context.Background(), ServiceSpec{
+		Port: port,
+		Health: HealthSpec{
+			Type:         "http",
+			URL:          "http://[::1]:${PORT}/",
+			ExpectStatus: []int{204},
+		},
+	}, Environment{values: map[string]string{"PORT": fmt.Sprintf("%d", port)}}, t.TempDir(), func() bool { return true })
+	if !result.Healthy {
+		t.Fatalf("expected HTTP health to pass for IPv6 loopback listener: %+v", result)
+	}
+}
+
 func TestWaitForStartupRequiresStableProcess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -162,4 +201,14 @@ func TestProbeHealthHTTPUsesCallerDeadline(t *testing.T) {
 	if !deadlineResult.Healthy {
 		t.Fatalf("expected deadline-bound probe to succeed, got %+v", deadlineResult)
 	}
+}
+
+func listenIPv6Loopback(t *testing.T) net.Listener {
+	t.Helper()
+
+	listener, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skipf("IPv6 loopback unavailable: %v", err)
+	}
+	return listener
 }

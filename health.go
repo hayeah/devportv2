@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -107,7 +108,8 @@ func ProbeHealth(ctx context.Context, service ServiceSpec, env Environment, cwd 
 }
 
 func portListening(port int) bool {
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 200*time.Millisecond)
+	dialer := net.Dialer{Timeout: 200 * time.Millisecond}
+	conn, err := dialer.Dial("tcp", net.JoinHostPort("localhost", strconv.Itoa(port)))
 	if err != nil {
 		return false
 	}
