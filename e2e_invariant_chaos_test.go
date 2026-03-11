@@ -15,14 +15,14 @@ import (
 )
 
 type invariantStatusView struct {
-	Key           string   `json:"key"`
-	Status        string   `json:"status"`
-	Health        string   `json:"health"`
-	PID           int      `json:"pid"`
-	SupervisorPID int      `json:"supervisor_pid"`
-	Drift         []string `json:"drift"`
-	LastError     string   `json:"last_error"`
-	LastReason    string   `json:"last_reason"`
+	Key           string  `json:"key"`
+	Status        string  `json:"status"`
+	Health        string  `json:"health"`
+	PID           int     `json:"pid"`
+	SupervisorPID int     `json:"supervisor_pid"`
+	Issues        []issue `json:"issues"`
+	LastError     string  `json:"last_error"`
+	LastReason    string  `json:"last_reason"`
 }
 
 type invariantDBState struct {
@@ -75,8 +75,8 @@ func TestEndToEndInvariantChaosRecovery(t *testing.T) {
 		if status.Health != "unhealthy" {
 			t.Fatalf("expected unhealthy health after stale starting reconcile, got %+v", status)
 		}
-		if !contains(status.Drift, "supervisor lock not held") {
-			t.Fatalf("expected supervisor lock drift, got %+v", status.Drift)
+		if !containsIssueSummary(status.Issues, "supervisor lock not held") {
+			t.Fatalf("expected supervisor lock issue, got %+v", status.Issues)
 		}
 		if status.LastReason != "supervisor_missing" {
 			t.Fatalf("expected last_reason=supervisor_missing, got %+v", status)
@@ -143,8 +143,8 @@ func TestEndToEndInvariantChaosRecovery(t *testing.T) {
 		if status.Health != "healthy" {
 			t.Fatalf("expected healthy status after recovery start, got %+v", status)
 		}
-		if len(status.Drift) != 0 {
-			t.Fatalf("expected no drift after recovery start, got %+v", status.Drift)
+		if len(status.Issues) != 0 {
+			t.Fatalf("expected no issues after recovery start, got %+v", status.Issues)
 		}
 
 		state := h.dbInvariantState("jobs/worker")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -58,6 +59,7 @@ func (a *App) RootCommand() *cobra.Command {
 	root.AddCommand(a.newStopCommand(options))
 	root.AddCommand(a.newRestartCommand(options))
 	root.AddCommand(a.newStatusCommand(options))
+	root.AddCommand(a.newDoctorCommand(options))
 	root.AddCommand(a.newLogsCommand(options))
 	root.AddCommand(a.newAttachCommand(options))
 	root.AddCommand(a.newFreePortCommand(options))
@@ -165,7 +167,6 @@ func (a *App) newRestartCommand(options *rootOptions) *cobra.Command {
 
 func (a *App) newStatusCommand(options *rootOptions) *cobra.Command {
 	var jsonOutput bool
-	var diffOnly bool
 	command := &cobra.Command{
 		Use:   "status",
 		Short: "Report service status",
@@ -180,16 +181,40 @@ func (a *App) newStatusCommand(options *rootOptions) *cobra.Command {
 				return err
 			}
 			if jsonOutput {
-				encoder := json.NewEncoder(a.managerIO.Stdout)
-				encoder.SetIndent("", "  ")
-				return encoder.Encode(statuses)
+				return writeJSON(a.managerIO.Stdout, statuses)
 			}
-			return manager.PrintStatus(statuses, diffOnly)
+			return manager.PrintStatus(statuses)
 		},
 	}
 	command.Flags().StringArrayVar(&options.keys, "key", nil, "service key")
 	command.Flags().BoolVar(&jsonOutput, "json", false, "print JSON")
-	command.Flags().BoolVar(&diffOnly, "diff", false, "show drift only")
+	return command
+}
+
+func (a *App) newDoctorCommand(options *rootOptions) *cobra.Command {
+	var jsonOutput bool
+	command := &cobra.Command{
+		Use:   "doctor",
+		Short: "Report service issues",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			manager, err := a.manager(options)
+			if err != nil {
+				return err
+			}
+			defer manager.Close()
+			statuses, err := manager.Status(context.Background(), options.keys)
+			if err != nil {
+				return err
+			}
+			statuses = devport.FilterStatusesWithIssues(statuses)
+			if jsonOutput {
+				return writeJSON(a.managerIO.Stdout, statuses)
+			}
+			return manager.PrintDoctor(statuses)
+		},
+	}
+	command.Flags().StringArrayVar(&options.keys, "key", nil, "service key")
+	command.Flags().BoolVar(&jsonOutput, "json", false, "print JSON")
 	return command
 }
 
@@ -360,6 +385,12 @@ func attachKey(provider attachKeyProvider, keys []string, chooser attachKeyChoos
 	default:
 		return chooser(matches, query)
 	}
+}
+
+func writeJSON(writer io.Writer, value any) error {
+	encoder := json.NewEncoder(writer)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(value)
 }
 
 func chooseKeyWithFzf(keys []string, query string) (string, error) {

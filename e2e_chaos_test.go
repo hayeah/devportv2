@@ -136,8 +136,8 @@ func (h *e2eHarness) runChaosAction(t *testing.T, rng *rand.Rand, webPort *int, 
 		h.writeChaosConfig(portRangeStart, *webPort)
 		web := h.findStatus("app/web")
 		if web.Status == "running" {
-			drift := h.findStatus("app/web").Drift
-			_ = drift
+			issues := h.findStatus("app/web").Issues
+			_ = issues
 		}
 		return fmt.Sprintf("mutate-config:web-port=%d", *webPort)
 	default:
@@ -254,11 +254,11 @@ func (h *e2eHarness) checkConsistency(desiredWebPort int) error {
 
 		if status.Key == "app/web" && status.Status == "running" {
 			if desiredWebPort != status.Port {
-				if !contains(status.Drift, "spec changed since last start") {
-					return fmt.Errorf("web missing spec-change drift: %v", status.Drift)
+				if !containsIssueSummary(status.Issues, "spec changed since last start") {
+					return fmt.Errorf("web missing spec-change issue: %v", status.Issues)
 				}
-				if !contains(status.Drift, "wrong port listening") {
-					return fmt.Errorf("web missing wrong-port drift: %v", status.Drift)
+				if !containsIssueSummary(status.Issues, "wrong port listening") {
+					return fmt.Errorf("web missing wrong-port issue: %v", status.Issues)
 				}
 			}
 		}

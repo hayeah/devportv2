@@ -5,7 +5,7 @@ description: Manage dev services with stable port assignment, health checks, and
 
 # devport
 
-`devport` is a local dev service manager. It runs services in tmux, tracks state in SQLite, and reports drift between desired config and actual runtime.
+`devport` is a local dev service manager. It runs services in tmux, tracks state in SQLite, and reports issues between desired config and actual runtime.
 
 All services are declared in one TOML spec file. No ad-hoc unnamed services, no implicit port assignment, no hidden auto-restart.
 
@@ -124,8 +124,11 @@ devport status
 # Machine-readable JSON (preferred for agents)
 devport status --json
 
-# Show only drift (desired vs actual mismatches)
-devport status --diff
+# Diagnose issues
+devport doctor
+
+# Machine-readable issue report
+devport doctor --json
 
 # Filter to specific services
 devport status --json --key app/web
@@ -182,7 +185,7 @@ Typical sequence for managing services:
 devport up
 
 # Check for problems
-devport status --json --diff
+devport doctor --json
 
 # If a service is unhealthy, read its logs
 devport logs --key <service>
@@ -200,9 +203,13 @@ Services have four states:
 - `running` — process alive and healthy
 - `failed` — process exited unexpectedly or health check timed out
 
-### Drift
+### Issues
 
-Drift is reported separately from status — a service can be `running` but drifted. Drift reasons include:
+`status --json` includes:
+
+- `issues` — structured diagnostics suitable for machines and UI
+
+Issues are reported separately from lifecycle status — a service can be `running` but still have issues. Current issue summaries include:
 
 - `spec changed since last start` — config hash mismatch, needs restart
 - `wrong port listening` — service runs on a different port than configured
@@ -314,7 +321,7 @@ tail -f ~/.local/log/devport.jsonl | jq 'select(.service == "app/web")'
 
 - `status` is not purely read-only — it repairs stale DB rows when runtime liveness disagrees
 - A `failed` service may still have a zombie child process; recovery paths reap stale PIDs before restarting
-- Health check failure is drift, not an automatic transition to `failed`
+- Health check failure is reported as an issue, not an automatic transition to `failed`
 - `freeport` checks both configured ports and actual listening ports on localhost
 - tmux window names are deterministic hashes (not human-readable service names)
 

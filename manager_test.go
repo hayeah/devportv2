@@ -86,7 +86,7 @@ hostname = "web.example.test"
 		t.Fatalf("expected 2 statuses, got %d", len(statuses))
 	}
 
-	if err := manager.PrintStatus(statuses, false); err != nil {
+	if err := manager.PrintStatus(statuses); err != nil {
 		t.Fatalf("PrintStatus: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "KEY\tSTATUS") && !strings.Contains(stdout.String(), "KEY") {

@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"os/exec"
-	"sort"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -24,21 +23,27 @@ type Manager struct {
 }
 
 type StatusView struct {
-	Key           string   `json:"key"`
-	Status        string   `json:"status"`
-	Health        string   `json:"health"`
-	PID           int      `json:"pid"`
-	SupervisorPID int      `json:"supervisor_pid"`
-	Port          int      `json:"port"`
-	NoPort        bool     `json:"no_port"`
-	RestartCount  int      `json:"restart_count"`
-	PublicHost    string   `json:"public_hostname,omitempty"`
-	Drift         []string `json:"drift"`
-	LastError     string   `json:"last_error,omitempty"`
-	LastExitCode  int      `json:"last_exit_code,omitempty"`
-	LastReason    string   `json:"last_reason,omitempty"`
-	LastChecked   string   `json:"last_checked,omitempty"`
-	CheckDuration int64    `json:"check_duration_ms,omitempty"`
+	Key           string  `json:"key"`
+	Status        string  `json:"status"`
+	Health        string  `json:"health"`
+	PID           int     `json:"pid"`
+	SupervisorPID int     `json:"supervisor_pid"`
+	Port          int     `json:"port"`
+	NoPort        bool    `json:"no_port"`
+	RestartCount  int     `json:"restart_count"`
+	PublicHost    string  `json:"public_hostname,omitempty"`
+	Issues        []Issue `json:"issues"`
+	LastError     string  `json:"last_error,omitempty"`
+	LastExitCode  int     `json:"last_exit_code,omitempty"`
+	LastReason    string  `json:"last_reason,omitempty"`
+	LastChecked   string  `json:"last_checked,omitempty"`
+	CheckDuration int64   `json:"check_duration_ms,omitempty"`
+}
+
+type Issue struct {
+	Code     string `json:"code"`
+	Severity string `json:"severity"`
+	Summary  string `json:"summary"`
 }
 
 type IngressDocument struct {
@@ -430,18 +435,28 @@ func (m *Manager) statusForKey(ctx context.Context, key string) (StatusView, err
 		record:  record,
 		view:    m.baseStatusView(key, service, record),
 	}
-	if err := m.applySpecDrift(&status); err != nil {
+	if err := m.applySpecIssues(&status); err != nil {
 		return StatusView{}, err
 	}
 	if err := m.reconcileSupervisor(ctx, &status); err != nil {
 		return StatusView{}, err
 	}
-	m.applyPortDrift(&status)
+	m.applyPortIssues(&status)
 	if err := m.updateHealthStatus(ctx, &status); err != nil {
 		return StatusView{}, err
 	}
 
-	sort.Strings(status.view.Drift)
+	if status.view.Status == "failed" {
+		summary := "service failed"
+		if strings.TrimSpace(status.view.LastError) != "" {
+			summary = status.view.LastError
+		}
+		addIssue(&status.view, Issue{
+			Code:     "service_failed",
+			Severity: "error",
+			Summary:  summary,
+		})
+	}
 	return status.view, nil
 }
 
@@ -452,7 +467,7 @@ func (m *Manager) baseStatusView(key string, service ServiceSpec, record *Servic
 		Port:       service.Port,
 		NoPort:     service.NoPort,
 		PublicHost: service.Public.Hostname,
-		Drift:      []string{},
+		Issues:     []Issue{},
 	}
 	if record == nil {
 		return view
@@ -470,13 +485,17 @@ func (m *Manager) baseStatusView(key string, service ServiceSpec, record *Servic
 	return view
 }
 
-func (m *Manager) applySpecDrift(status *serviceStatus) error {
+func (m *Manager) applySpecIssues(status *serviceStatus) error {
 	specHash, err := status.service.SpecHash()
 	if err != nil {
 		return err
 	}
 	if status.record != nil && status.record.SpecHash != "" && status.record.SpecHash != specHash {
-		status.view.Drift = append(status.view.Drift, "spec changed since last start")
+		addIssue(&status.view, Issue{
+			Code:     "spec_changed_since_last_start",
+			Severity: "warning",
+			Summary:  "spec changed since last start",
+		})
 	}
 	return nil
 }
@@ -492,7 +511,11 @@ func (m *Manager) reconcileSupervisor(ctx context.Context, status *serviceStatus
 	}
 
 	status.view.Status = "failed"
-	status.view.Drift = append(status.view.Drift, "supervisor lock not held")
+	addIssue(&status.view, Issue{
+		Code:     "supervisor_lock_not_held",
+		Severity: "error",
+		Summary:  "supervisor lock not held",
+	})
 	if status.record == nil {
 		return nil
 	}
@@ -513,12 +536,20 @@ func (m *Manager) reconcileSupervisor(ctx context.Context, status *serviceStatus
 	return nil
 }
 
-func (m *Manager) applyPortDrift(status *serviceStatus) {
+func (m *Manager) applyPortIssues(status *serviceStatus) {
 	if status.view.Port > 0 && runningStatus(status.view.Status) && !portListening(status.view.Port) {
-		status.view.Drift = append(status.view.Drift, "port not listening")
+		addIssue(&status.view, Issue{
+			Code:     "port_not_listening",
+			Severity: "error",
+			Summary:  "port not listening",
+		})
 	}
 	if status.record != nil && status.record.Port > 0 && status.record.Port != status.service.Port {
-		status.view.Drift = append(status.view.Drift, "wrong port listening")
+		addIssue(&status.view, Issue{
+			Code:     "wrong_port_listening",
+			Severity: "error",
+			Summary:  "wrong port listening",
+		})
 	}
 }
 
@@ -546,7 +577,11 @@ func (m *Manager) updateHealthStatus(ctx context.Context, status *serviceStatus)
 		if result.Healthy {
 			status.view.Health = "healthy"
 		} else {
-			status.view.Drift = append(status.view.Drift, "health check failing")
+			addIssue(&status.view, Issue{
+				Code:     "health_check_failing",
+				Severity: "error",
+				Summary:  "health check failing",
+			})
 		}
 		status.view.LastChecked = nowUTC()
 		status.view.CheckDuration = result.Duration.Milliseconds()
@@ -582,27 +617,43 @@ func runningStatus(status string) bool {
 	return status == "running" || status == "starting"
 }
 
-func (m *Manager) PrintStatus(statuses []StatusView, diffOnly bool) error {
+func addIssue(view *StatusView, issue Issue) {
+	for _, existing := range view.Issues {
+		if existing.Code == issue.Code && existing.Summary == issue.Summary {
+			return
+		}
+	}
+	view.Issues = append(view.Issues, issue)
+}
+
+func FilterStatusesWithIssues(statuses []StatusView) []StatusView {
+	filtered := make([]StatusView, 0, len(statuses))
+	for _, status := range statuses {
+		if len(status.Issues) == 0 {
+			continue
+		}
+		filtered = append(filtered, status)
+	}
+	return filtered
+}
+
+func issueSummaries(status StatusView) string {
+	if len(status.Issues) == 0 {
+		return "-"
+	}
+	values := make([]string, 0, len(status.Issues))
+	for _, issue := range status.Issues {
+		values = append(values, issue.Summary)
+	}
+	return strings.Join(values, ", ")
+}
+
+func (m *Manager) PrintStatus(statuses []StatusView) error {
 	writer := tabwriter.NewWriter(m.runtime.IO.Stdout, 0, 8, 2, ' ', 0)
 	defer writer.Flush()
 
-	if diffOnly {
-		fmt.Fprintln(writer, "KEY\tSTATUS\tDRIFT")
-		for _, status := range statuses {
-			if len(status.Drift) == 0 {
-				continue
-			}
-			fmt.Fprintf(writer, "%s\t%s\t%s\n", status.Key, status.Status, strings.Join(status.Drift, ", "))
-		}
-		return nil
-	}
-
-	fmt.Fprintln(writer, "KEY\tSTATUS\tHEALTH\tPID\tPORT\tRESTARTS\tCHECK\tDRIFT")
+	fmt.Fprintln(writer, "KEY\tSTATUS\tHEALTH\tPID\tPORT\tRESTARTS\tCHECK\tISSUES")
 	for _, status := range statuses {
-		drift := "-"
-		if len(status.Drift) > 0 {
-			drift = strings.Join(status.Drift, ", ")
-		}
 		check := "-"
 		if status.LastChecked != "" {
 			check = fmt.Sprintf("%dms ago", status.CheckDuration)
@@ -611,7 +662,24 @@ func (m *Manager) PrintStatus(statuses []StatusView, diffOnly bool) error {
 				check = fmt.Sprintf("%dms (%s ago)", status.CheckDuration, ago)
 			}
 		}
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\n", status.Key, status.Status, status.Health, status.PID, status.Port, status.RestartCount, check, drift)
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\n", status.Key, status.Status, status.Health, status.PID, status.Port, status.RestartCount, check, issueSummaries(status))
+	}
+	return nil
+}
+
+func (m *Manager) PrintDoctor(statuses []StatusView) error {
+	writer := tabwriter.NewWriter(m.runtime.IO.Stdout, 0, 8, 2, ' ', 0)
+	defer writer.Flush()
+
+	filtered := FilterStatusesWithIssues(statuses)
+	if len(filtered) == 0 {
+		_, err := fmt.Fprintln(writer, "No issues found.")
+		return err
+	}
+
+	fmt.Fprintln(writer, "KEY\tSTATUS\tHEALTH\tISSUES")
+	for _, status := range filtered {
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", status.Key, status.Status, status.Health, issueSummaries(status))
 	}
 	return nil
 }

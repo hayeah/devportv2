@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
-	"slices"
 	"testing"
 	"time"
 )
@@ -271,7 +270,7 @@ startup_timeout = "5s"%s
 `, spec.PortRangeStart, spec.PortRangeEnd, h.session, h.root, h.serviceBin, spec.WebMessage, spec.WebPort, h.root, h.serviceBin, spec.WorkerMessage, cronSection))
 }
 
-func (h *e2eHarness) assertStatusMatches(status statusView, wantStatus, wantHealth string, wantDrift []string) {
+func (h *e2eHarness) assertStatusMatches(status statusView, wantStatus, wantHealth string, wantIssues []string) {
 	h.t.Helper()
 
 	if status.Status != wantStatus {
@@ -280,8 +279,8 @@ func (h *e2eHarness) assertStatusMatches(status statusView, wantStatus, wantHeal
 	if status.Health != wantHealth {
 		h.t.Fatalf("expected %s health=%s, got %+v", status.Key, wantHealth, status)
 	}
-	if !slices.Equal(status.Drift, wantDrift) {
-		h.t.Fatalf("expected %s drift=%v, got %+v", status.Key, wantDrift, status)
+	if got := issueSummaries(status.Issues); !stringSlicesEqual(got, wantIssues) {
+		h.t.Fatalf("expected %s issues=%v, got %+v", status.Key, wantIssues, status)
 	}
 }
 
@@ -300,4 +299,26 @@ func fetchHTTPBody(t *testing.T, port int) string {
 		t.Fatalf("read web response: %v", err)
 	}
 	return string(body)
+}
+
+func stringSlicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	counts := map[string]int{}
+	for _, value := range left {
+		counts[value]++
+	}
+	for _, value := range right {
+		counts[value]--
+		if counts[value] < 0 {
+			return false
+		}
+	}
+	for _, count := range counts {
+		if count != 0 {
+			return false
+		}
+	}
+	return true
 }

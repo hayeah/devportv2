@@ -23,7 +23,7 @@ No single source is sufficient on its own. `status` and lifecycle commands recon
 - Service PID is non-zero and expected to be alive.
 - tmux window exists.
 - If the service has a port, that port should be listening.
-- Health may still be `unhealthy` if the health probe fails; that is reported as drift, not an automatic state transition.
+- Health may still be `unhealthy` if the health probe fails; that is reported as an issue, not an automatic state transition.
 
 ### `starting`
 
@@ -57,7 +57,7 @@ No single source is sufficient on its own. `status` and lifecycle commands recon
 `status` is allowed to repair obviously stale runtime state.
 
 - If SQLite says `running` or `starting` but the supervisor lock is gone, the service is reconciled to `failed`.
-- That reconciliation records drift `supervisor lock not held`.
+- That reconciliation records the `supervisor lock not held` issue.
 - Health is saved as unhealthy for that condition.
 - `last_reason` is set to `supervisor_missing` when filling in the failed row.
 
@@ -84,9 +84,9 @@ Without this, `up` can fail on `port already in use` or report an old failure fr
 
 This makes `stop` a reliable cleanup operation, not just a polite request to the supervisor.
 
-## Drift Semantics
+## Issue Semantics
 
-Drift is diagnostic. It does not always mean the service must be restarted immediately.
+Issues are diagnostic. They do not always mean the service must be restarted immediately.
 
 - `spec changed since last start`: the stored spec hash does not match the current config.
 - `wrong port listening`: the service is running on a recorded port that no longer matches the config.
@@ -101,7 +101,7 @@ The current blackbox tests assert these invariants through real CLI calls and re
 - happy-path lifecycle
 - restart PID changes
 - failed startup behavior
-- spec drift reporting
+- spec-change issue reporting
 - supervisor death
 - child death
 - tmux window loss

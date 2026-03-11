@@ -28,15 +28,21 @@ type e2eHarness struct {
 }
 
 type statusView struct {
-	Key           string   `json:"key"`
-	Status        string   `json:"status"`
-	Health        string   `json:"health"`
-	PID           int      `json:"pid"`
-	SupervisorPID int      `json:"supervisor_pid"`
-	RestartCount  int      `json:"restart_count"`
-	Port          int      `json:"port"`
-	Drift         []string `json:"drift"`
-	LastError     string   `json:"last_error"`
+	Key           string  `json:"key"`
+	Status        string  `json:"status"`
+	Health        string  `json:"health"`
+	PID           int     `json:"pid"`
+	SupervisorPID int     `json:"supervisor_pid"`
+	RestartCount  int     `json:"restart_count"`
+	Port          int     `json:"port"`
+	Issues        []issue `json:"issues"`
+	LastError     string  `json:"last_error"`
+}
+
+type issue struct {
+	Code     string `json:"code"`
+	Severity string `json:"severity"`
+	Summary  string `json:"summary"`
 }
 
 func TestEndToEnd(t *testing.T) {
@@ -94,8 +100,8 @@ startup_timeout = "5s"
 			if status.Health != "healthy" {
 				t.Fatalf("expected %s to be healthy, got %s", status.Key, status.Health)
 			}
-			if len(status.Drift) != 0 {
-				t.Fatalf("expected no drift for %s, got %v", status.Key, status.Drift)
+			if len(status.Issues) != 0 {
+				t.Fatalf("expected no issues for %s, got %v", status.Key, status.Issues)
 			}
 		}
 
@@ -282,7 +288,7 @@ startup_timeout = "3s"
 		}
 	})
 
-	t.Run("status_detects_spec_drift", func(t *testing.T) {
+	t.Run("status_detects_spec_issues", func(t *testing.T) {
 		t.Parallel()
 
 		h := newHarness(t)
@@ -326,11 +332,16 @@ startup_timeout = "10s"
 `, start, start+9, h.session, h.root, h.serviceBin, webPortB))
 
 		status := h.findStatus("app/web")
-		if !contains(status.Drift, "spec changed since last start") {
-			t.Fatalf("expected spec drift, got %v", status.Drift)
+		if !containsIssueSummary(status.Issues, "spec changed since last start") {
+			t.Fatalf("expected spec-change issue, got %+v", status.Issues)
 		}
-		if !contains(status.Drift, "wrong port listening") {
-			t.Fatalf("expected wrong-port drift, got %v", status.Drift)
+		if !containsIssueSummary(status.Issues, "wrong port listening") {
+			t.Fatalf("expected wrong-port issue, got %+v", status.Issues)
+		}
+
+		doctor := h.doctorJSON()
+		if len(doctor) != 1 || doctor[0].Key != "app/web" {
+			t.Fatalf("expected doctor json to contain app/web only, got %+v", doctor)
 		}
 	})
 
@@ -492,9 +503,20 @@ func (h *e2eHarness) runDetailed(args ...string) (string, string, error) {
 func (h *e2eHarness) statusJSON() []statusView {
 	h.t.Helper()
 	output := h.runOK("status", "--file", h.configPath, "--json")
+	return h.decodeStatuses(output, "status")
+}
+
+func (h *e2eHarness) doctorJSON() []statusView {
+	h.t.Helper()
+	output := h.runOK("doctor", "--file", h.configPath, "--json")
+	return h.decodeStatuses(output, "doctor")
+}
+
+func (h *e2eHarness) decodeStatuses(output, label string) []statusView {
+	h.t.Helper()
 	var statuses []statusView
 	if err := json.Unmarshal([]byte(output), &statuses); err != nil {
-		h.t.Fatalf("decode status json: %v\n%s", err, output)
+		h.t.Fatalf("decode %s json: %v\n%s", label, err, output)
 	}
 	return statuses
 }
@@ -517,4 +539,21 @@ func contains(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func containsIssueSummary(values []issue, target string) bool {
+	for _, value := range values {
+		if value.Summary == target {
+			return true
+		}
+	}
+	return false
+}
+
+func issueSummaries(values []issue) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		result = append(result, value.Summary)
+	}
+	return result
 }
