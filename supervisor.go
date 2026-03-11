@@ -25,7 +25,7 @@ type Supervisor struct {
 	log      *slog.Logger
 }
 
-func NewSupervisor(manager *Manager, key string) (*Supervisor, error) {
+func NewSupervisor(ctx context.Context, manager *Manager, key string) (*Supervisor, error) {
 	service, err := manager.config.Service(key)
 	if err != nil {
 		return nil, err
@@ -54,7 +54,7 @@ func NewSupervisor(manager *Manager, key string) (*Supervisor, error) {
 		TmuxWindow:    manager.tmux.WindowName(key),
 		StartedAt:     nowUTC(),
 	}
-	previous, err := manager.store.Service(context.Background(), key)
+	previous, err := manager.store.Service(ctx, key)
 	if err != nil {
 		return nil, err
 	}
@@ -105,15 +105,17 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		return err
 	}
 
-	s.record.PID = child.Process.Pid
-	if err := s.persist(ctx); err != nil {
-		return err
-	}
-
 	waitCh := make(chan error, 1)
 	go func() {
 		waitCh <- child.Wait()
 	}()
+
+	s.record.PID = child.Process.Pid
+	if err := s.persist(ctx); err != nil {
+		_ = terminateProcessGroup(child.Process.Pid, gracefulStopTimeout)
+		<-waitCh
+		return err
+	}
 
 	signalCh := make(chan os.Signal, 4)
 	signal.Notify(signalCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
@@ -125,13 +127,15 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		return processAlive(s.record.PID)
 	})
 	if readyErr != nil {
-		_ = s.manager.store.SaveHealth(ctx, HealthRecord{
+		if err := s.manager.store.SaveHealth(ctx, HealthRecord{
 			Key:        s.service.Key,
 			CheckType:  s.service.Health.Type,
 			Healthy:    false,
 			Detail:     result.Detail,
 			DurationMS: result.Duration.Milliseconds(),
-		})
+		}); err != nil {
+			s.log.Error("health_check_failed", "error", err)
+		}
 		s.record.Status = "failed"
 		s.record.LastError = readyErr.Error()
 		s.record.LastExitReason = "startup_failed"
@@ -147,18 +151,24 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		return readyErr
 	}
 
-	_ = s.manager.store.SaveHealth(ctx, HealthRecord{
+	if err := s.manager.store.SaveHealth(ctx, HealthRecord{
 		Key:        s.service.Key,
 		CheckType:  s.service.Health.Type,
 		Healthy:    true,
 		Detail:     result.Detail,
 		DurationMS: result.Duration.Milliseconds(),
-	})
+	}); err != nil {
+		_ = terminateProcessGroup(child.Process.Pid, gracefulStopTimeout)
+		<-waitCh
+		return err
+	}
 	s.record.Status = "running"
 	s.record.LastError = ""
 	s.record.LastExitReason = ""
 	s.record.LastExitCode = 0
 	if err := s.persist(ctx); err != nil {
+		_ = terminateProcessGroup(child.Process.Pid, gracefulStopTimeout)
+		<-waitCh
 		return err
 	}
 	_ = s.manager.store.RecordEvent(ctx, s.service.Key, "info", "service_started", map[string]any{"pid": s.record.PID, "port": s.record.Port})
@@ -219,7 +229,10 @@ func terminateProcessGroup(pid int, timeout time.Duration) error {
 		return nil
 	}
 	groupID := -pid
-	_ = syscall.Kill(groupID, syscall.SIGTERM)
+	termErr := syscall.Kill(groupID, syscall.SIGTERM)
+	if termErr != nil && !errors.Is(termErr, syscall.ESRCH) {
+		return termErr
+	}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if !processAlive(pid) {
@@ -227,7 +240,14 @@ func terminateProcessGroup(pid int, timeout time.Duration) error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	_ = syscall.Kill(groupID, syscall.SIGKILL)
+	killErr := syscall.Kill(groupID, syscall.SIGKILL)
+	if killErr != nil && !errors.Is(killErr, syscall.ESRCH) {
+		return killErr
+	}
+	time.Sleep(100 * time.Millisecond)
+	if processAlive(pid) {
+		return fmt.Errorf("process %d is still alive after SIGKILL", pid)
+	}
 	return nil
 }
 

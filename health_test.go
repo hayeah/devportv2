@@ -106,3 +106,20 @@ func TestEnsurePortAvailable(t *testing.T) {
 		t.Fatalf("expected ensurePortAvailable to fail")
 	}
 }
+
+func TestProbeHealthCommandTruncatesDetail(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	result := ProbeHealth(ctx, ServiceSpec{
+		Health: HealthSpec{
+			Type:    "command",
+			Command: []string{"sh", "-c", "perl -e 'print \"x\" x 5000; exit 1'"},
+		},
+	}, Environment{values: map[string]string{}}, dir, func() bool { return true })
+	if result.Healthy {
+		t.Fatalf("expected health command to fail")
+	}
+	if len(result.Detail) > maxHealthDetailBytes+len("...(truncated)") {
+		t.Fatalf("expected truncated detail, got len=%d", len(result.Detail))
+	}
+}

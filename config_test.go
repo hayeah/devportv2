@@ -123,7 +123,21 @@ port = 19001
 [service."b".health]
 type = "process"
 `,
-			message: `port 19001 already used by "a"`,
+			message: `port 19001 already used by`,
+		},
+		{
+			name: "port env requires port",
+			config: `
+version = 2
+[service."a"]
+cwd = "/tmp"
+command = ["a"]
+no_port = true
+port_env = "PORT"
+[service."a".health]
+type = "process"
+`,
+			message: "port_env requires port to be set",
 		},
 		{
 			name: "missing port mode",

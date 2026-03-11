@@ -94,6 +94,16 @@ func (m *Manager) Close() error {
 }
 
 func (m *Manager) Start(ctx context.Context, key, cause string) error {
+	unlock, err := m.lockOperation(key)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	return m.startLocked(ctx, key, cause)
+}
+
+func (m *Manager) startLocked(ctx context.Context, key, cause string) error {
 	service, err := m.config.Service(key)
 	if err != nil {
 		return err
@@ -116,7 +126,7 @@ func (m *Manager) Start(ctx context.Context, key, cause string) error {
 		return err
 	}
 
-	deadline := time.Now().Add(service.Health.StartupTimeout.Duration() + 2*time.Second)
+	deadline := time.Now().Add(service.Health.StartupTimeout.Duration() + 3*time.Second)
 	for time.Now().Before(deadline) {
 		record, err := m.store.Service(ctx, key)
 		if err != nil {
@@ -140,6 +150,16 @@ func (m *Manager) Start(ctx context.Context, key, cause string) error {
 }
 
 func (m *Manager) Stop(ctx context.Context, key, reason string) error {
+	unlock, err := m.lockOperation(key)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	return m.stopLocked(ctx, key, reason)
+}
+
+func (m *Manager) stopLocked(ctx context.Context, key, reason string) error {
 	record, err := m.store.Service(ctx, key)
 	if err != nil {
 		return err
@@ -189,7 +209,13 @@ func (m *Manager) Stop(ctx context.Context, key, reason string) error {
 }
 
 func (m *Manager) Restart(ctx context.Context, key string) error {
-	if err := m.Stop(ctx, key, "restart"); err != nil {
+	unlock, err := m.lockOperation(key)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	if err := m.stopLocked(ctx, key, "restart"); err != nil {
 		return err
 	}
 
@@ -203,7 +229,7 @@ func (m *Manager) Restart(ctx context.Context, key string) error {
 			return err
 		}
 	}
-	return m.Start(ctx, key, "restart")
+	return m.startLocked(ctx, key, "restart")
 }
 
 func (m *Manager) Up(ctx context.Context, keys []string) error {
@@ -358,7 +384,11 @@ func (m *Manager) Status(ctx context.Context, keys []string) ([]StatusView, erro
 				return nil, err
 			}
 			result := ProbeHealth(ctx, service, env, cwd, func() bool {
-				return lockHeld && processAlive(view.PID)
+				held, err := LockHeld(m.lockPath(key))
+				if err != nil {
+					return false
+				}
+				return held && processAlive(view.PID)
 			})
 			healthValue = "unhealthy"
 			if result.Healthy {
@@ -412,7 +442,7 @@ func (m *Manager) PrintStatus(statuses []StatusView, diffOnly bool) error {
 }
 
 func (m *Manager) Supervise(ctx context.Context, key string) error {
-	supervisor, err := NewSupervisor(m, key)
+	supervisor, err := NewSupervisor(ctx, m, key)
 	if err != nil {
 		return err
 	}
@@ -421,6 +451,24 @@ func (m *Manager) Supervise(ctx context.Context, key string) error {
 
 func (m *Manager) lockPath(key string) string {
 	return m.paths.Locks + "/" + m.tmux.WindowName(key) + ".lock"
+}
+
+func (m *Manager) operationLockPath(key string) string {
+	return m.paths.Locks + "/" + m.tmux.WindowName(key) + ".op.lock"
+}
+
+func (m *Manager) lockOperation(key string) (func(), error) {
+	lock := NewFileLock(m.operationLockPath(key))
+	ok, err := lock.TryLock()
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("service %q is busy", key)
+	}
+	return func() {
+		_ = lock.Unlock()
+	}, nil
 }
 
 func (m *Manager) CleanupSession() error {

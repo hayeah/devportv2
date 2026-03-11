@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os/exec"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -18,12 +19,11 @@ type HealthResult struct {
 }
 
 const processStabilizationWindow = 750 * time.Millisecond
+const defaultHTTPHealthTimeout = 3 * time.Second
+const maxHealthDetailBytes = 2048
 
 func WaitForStartup(ctx context.Context, service ServiceSpec, env Environment, cwd string, processAlive func() bool) (HealthResult, error) {
 	timeout := service.Health.StartupTimeout.Duration()
-	if timeout <= 0 {
-		timeout = 10 * time.Second
-	}
 	deadline := time.Now().Add(timeout)
 	var healthySince time.Time
 
@@ -70,11 +70,12 @@ func ProbeHealth(ctx context.Context, service ServiceSpec, env Environment, cwd 
 		}
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, env.ExpandString(service.Health.URL), nil)
 		if err != nil {
-			return HealthResult{Healthy: false, Detail: err.Error(), Duration: time.Since(started)}
+			return HealthResult{Healthy: false, Detail: truncateHealthDetail(err.Error()), Duration: time.Since(started)}
 		}
-		response, err := http.DefaultClient.Do(request)
+		client := &http.Client{Timeout: defaultHTTPHealthTimeout}
+		response, err := client.Do(request)
 		if err != nil {
-			return HealthResult{Healthy: false, Detail: err.Error(), Duration: time.Since(started)}
+			return HealthResult{Healthy: false, Detail: truncateHealthDetail(err.Error()), Duration: time.Since(started)}
 		}
 		defer response.Body.Close()
 		if slices.Contains(service.Health.ExpectStatus, response.StatusCode) {
@@ -91,7 +92,11 @@ func ProbeHealth(ctx context.Context, service ServiceSpec, env Environment, cwd 
 		cmd.Env = env.Environ()
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			return HealthResult{Healthy: false, Detail: fmt.Sprintf("%v: %s", err, string(output)), Duration: time.Since(started)}
+			return HealthResult{
+				Healthy:  false,
+				Detail:   truncateHealthDetail(fmt.Sprintf("%v: %s", err, string(output))),
+				Duration: time.Since(started),
+			}
 		}
 		return HealthResult{Healthy: true, Detail: "command succeeded", Duration: time.Since(started)}
 	default:
@@ -123,4 +128,12 @@ func processAlive(pid int) bool {
 		return false
 	}
 	return syscall.Kill(pid, 0) == nil
+}
+
+func truncateHealthDetail(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= maxHealthDetailBytes {
+		return value
+	}
+	return value[:maxHealthDetailBytes] + "...(truncated)"
 }

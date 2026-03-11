@@ -3,11 +3,13 @@ package devport
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -152,6 +154,41 @@ startup_timeout = "5s"
 	if err := manager.Start(ctx, "app/web", "test-start"); err != nil {
 		t.Fatalf("Start after stop: %v", err)
 	}
+
+	if err := manager.Stop(ctx, "app/web", "prepare-concurrent-start"); err != nil {
+		t.Fatalf("Stop before concurrent start: %v", err)
+	}
+
+	results := make(chan error, 2)
+	var startWG sync.WaitGroup
+	startWG.Add(2)
+	for range 2 {
+		go func() {
+			defer startWG.Done()
+			results <- manager.Start(ctx, "app/web", "concurrent-start")
+		}()
+	}
+	startWG.Wait()
+	close(results)
+
+	var successCount int
+	var busyCount int
+	for err := range results {
+		switch {
+		case err == nil:
+			successCount++
+		case errors.Is(err, context.Canceled):
+			t.Fatalf("unexpected context cancellation: %v", err)
+		case strings.Contains(err.Error(), `service "app/web" is busy`):
+			busyCount++
+		default:
+			t.Fatalf("unexpected concurrent start error: %v", err)
+		}
+	}
+	if successCount != 1 || busyCount != 1 {
+		t.Fatalf("expected one success and one busy error, got success=%d busy=%d", successCount, busyCount)
+	}
+
 	if err := manager.Down(ctx, nil); err != nil {
 		t.Fatalf("Down: %v", err)
 	}

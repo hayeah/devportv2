@@ -128,6 +128,9 @@ func (s *ServiceSpec) normalize() error {
 	if s.Port == 0 && !s.NoPort {
 		return fmt.Errorf("must set either port or no_port = true")
 	}
+	if s.PortEnv != "" && s.Port == 0 {
+		return fmt.Errorf("port_env requires port to be set")
+	}
 	if s.Restart == "" {
 		s.Restart = "never"
 	}
