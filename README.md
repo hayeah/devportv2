@@ -1,64 +1,22 @@
 ---
-name: devportv2
-description: Tmux-backed local process supervisor for TOML service specs. Use when you need to start, stop, inspect, or extend dev services with durable runtime state and blackbox lifecycle tests.
+name: devport
+description: Manage dev services with stable port assignment, health checks, and tmux-backed process supervision. Use when you need to start, stop, inspect, or restart dev services on a shared machine.
 ---
 
-# devportv2
+# devport
 
-`devportv2` is a Go CLI for running local development services from a v2 TOML spec.
-It launches one hidden supervisor per service inside tmux, persists runtime state in SQLite, and exposes a small CLI for lifecycle control and status inspection.
+`devport` is a local dev service manager. It runs services in tmux, tracks state in SQLite, and reports drift between desired config and actual runtime.
 
-This README is written for coding agents and maintainers.
-If you need the operational contract, also read [docs/runtime-invariants.md](./docs/runtime-invariants.md).
+All services are declared in one TOML spec file. No ad-hoc unnamed services, no implicit port assignment, no hidden auto-restart.
 
-## What The Repo Contains
+## Config File
 
-- `cli/devport/root.go`: Cobra CLI entry point and subcommand wiring.
-- `manager.go`: main orchestration layer for `up`, `down`, `start`, `stop`, `restart`, `status`, `logs`, `freeport`, `ingress`, and hidden `supervise`.
-- `supervisor.go`: child-process lifecycle, startup health gating, signal handling, and persistent state updates.
-- `config.go`: TOML parsing, validation, normalization, and spec hashing.
-- `store.go`: SQLite schema and persistence for services, health checks, and events.
-- `tmux.go`: tmux session/window lifecycle and pane capture.
-- `env.go`: env-file loading and `${VAR}` interpolation.
-- `health.go`: process, HTTP, command, and no-op health probes.
-- `e2e_test.go`: blackbox CLI happy-path coverage.
-- `e2e_chaos_test.go`: blackbox chaos coverage that kills children, supervisors, and tmux windows to find stale-state bugs.
-
-## Prerequisites
-
-- Go `1.26`
-- `tmux` on `PATH`
-- a Unix-like environment with signals and process groups
-
-The tests and the runtime both assume tmux is available.
-
-## Mental Model
-
-- One service spec maps to one tmux window.
-- The visible CLI runs short-lived commands.
-- The hidden `devport supervise` command is what actually owns the service lifecycle.
-- The authoritative runtime view is reconciled from multiple sources:
-  - desired config
-  - SQLite `services` rows
-  - flock-based supervisor locks
-  - tmux windows
-  - live child PID and bound port
-
-Do not assume the database alone is truth. `status` intentionally reconciles stale rows when lock or process liveness disagrees.
-
-## Config Model
-
-Config defaults to `~/.config/devport/devport.toml`.
-You can override it with `--file` or `DEVPORT_CONFIG`.
-
-State defaults to `~/.local/share/devport`.
-You can override it with `DEVPORT_STATE_DIR`.
-
-Minimal example:
+Default location: `~/.config/devport/devport.toml`
+Override with `--file <path>` or `DEVPORT_CONFIG` env var.
 
 ```toml
 version = 2
-port_range = { start = 19000, end = 19019 }
+port_range = { start = 19000, end = 19999 }
 tmux_session = "devport"
 
 [service."app/web"]
@@ -89,148 +47,279 @@ type = "process"
 startup_timeout = "5s"
 ```
 
-Important validation rules:
+### Service fields
 
-- `version` must be `2`.
-- each service must set exactly one of `port` or `no_port = true`.
-- `port_env` requires `port`.
-- `restart` only supports `"never"` today.
-- `public.hostname` only makes sense for port-bearing services.
-- duplicate service ports are rejected at config load time.
-- every service needs a `health` block.
+- `cwd` — working directory (required)
+- `command` — command array (required)
+- `port` — fixed port number (set exactly one of `port` or `no_port = true`)
+- `no_port` — set `true` for services that don't listen on a port
+- `port_env` — inject the port under an additional env var name (requires `port`)
+- `env_files` — list of dotenv files, later files override earlier ones
+- `restart` — only `"never"` is supported today
+- `health` — health check block (required for every service)
+- `public.hostname` — declare a public hostname for ingress export
 
-Supported health types:
+### Health check types
 
-- `none`
-- `process`
-- `http`
-- `command`
+- `process` — just check if the process is alive
+- `http` — HTTP GET with expected status codes (default `[200]`)
+- `command` — run an arbitrary command, must exit 0
+- `none` — no health checking
 
-Interpolation behavior:
+### Variable interpolation
 
-- `${PORT}` is injected automatically for port-bearing services.
-- `port_env` injects the same port value under a second env var name.
-- `${env:NAME}` and `${NAME}` both expand from the merged environment map.
-- later env files override earlier env files.
-- env files overlay the current process environment rather than replacing it.
+- `${PORT}` — auto-injected for port-bearing services
+- `${env:NAME}` or `${NAME}` — expand from merged environment (process env + env_files)
 
-## Command Surface
+### Validation rules
 
-- `devport up [--key ...]`
-- `devport down [--key ...]`
-- `devport start --key <service>`
-- `devport stop --key <service>`
-- `devport restart --key <service>`
-- `devport status [--json] [--diff] [--key ...]`
-- `devport logs --key <service> [--lines N]`
-- `devport freeport [--key ...]`
-- `devport ingress [--key ...]`
-- `devport supervise --key <service>`
-  - hidden command used internally from tmux
+- `version` must be `2`
+- each service must set exactly one of `port` or `no_port = true`
+- duplicate ports are rejected
+- every service needs a `health` block
 
-## Common Use Cases
+## Commands
+
+### Start services
 
 ```bash
-# Scenario: start every service from the current spec.
-go run ./cli/devport up
+# Start all services from the spec
+devport up
 
-# Scenario: start only the HTTP app while leaving background jobs alone.
-go run ./cli/devport start --key app/web
+# Start only specific services
+devport up --key app/web --key jobs/worker
 
-# Scenario: inspect machine-readable status from automation or tests.
-go run ./cli/devport status --json
-
-# Scenario: show only configuration/runtime drift without the full table.
-go run ./cli/devport status --diff
-
-# Scenario: restart a single service after changing code or env files.
-go run ./cli/devport restart --key app/web
-
-# Scenario: capture recent tmux pane output for a failing service.
-go run ./cli/devport logs --key app/web --lines 300
-
-# Scenario: ask devport for the next free port in the configured range.
-go run ./cli/devport freeport
-
-# Scenario: export public hostnames as JSON for an ingress adapter.
-go run ./cli/devport ingress
-
-# Scenario: stop everything and clean the tmux-backed runtime down.
-go run ./cli/devport down
+# Start a single service
+devport start --key app/web
 ```
 
-## Runtime Conventions
+### Stop services
 
-- tmux window names are deterministic hashes of service keys, not human-readable service names.
-- tmux windows are created with `remain-on-exit on`, which helps log inspection after failures.
-- selected env vars are pushed into tmux explicitly: `HOME`, `PATH`, `LOG_LEVEL`, `DEVPORT_STATE_DIR`, `DEVPORT_CONFIG`.
-- logs go both to stderr and to `~/.local/log/devport.jsonl` through the local structured logger.
-- the SQLite database lives at `<state-dir>/devport.db`.
-- lock files live under `<state-dir>/locks`.
+```bash
+# Stop all services
+devport down
 
-## Invariants And Recovery Rules
+# Stop specific services
+devport down --key app/web
 
-The short version:
+# Stop a single service
+devport stop --key app/web
+```
 
-- `running` and `starting` require the supervisor lock.
-- `starting` is transient; a missing lock during startup means stale state.
-- `status` may reconcile stale `running` or `starting` rows to `failed`.
-- `stop` must be able to clean up even if the supervisor is already gone.
-- `start` must reap stale orphan children before reusing the configured port.
-- `up` is idempotent for services already active with a valid supervisor lock.
+### Restart a service
 
-The detailed contract lives in [docs/runtime-invariants.md](./docs/runtime-invariants.md).
+```bash
+# Restart after code or config changes
+devport restart --key app/web
+```
+
+Restart is an explicit stop then start. There is no implicit restart on source changes.
+
+### Check status
+
+```bash
+# Human-readable table
+devport status
+
+# Machine-readable JSON (preferred for agents)
+devport status --json
+
+# Show only drift (desired vs actual mismatches)
+devport status --diff
+
+# Filter to specific services
+devport status --json --key app/web
+```
+
+Status reconciles multiple sources (SQLite, tmux, process liveness, file locks) and may repair stale state as a side effect.
+
+### Read logs
+
+```bash
+# Recent output from a service's tmux pane (default 200 lines)
+devport logs --key app/web
+
+# More lines for debugging
+devport logs --key app/web --lines 500
+```
+
+### Find a free port
+
+```bash
+# Get the next available port from the configured range
+devport freeport
+```
+
+This is a planning helper — use it when editing the spec to pick a port. It excludes both configured ports and ports already listening on localhost.
+
+### Export ingress rules
+
+```bash
+# Export public hostnames as Cloudflare tunnel ingress JSON
+devport ingress
+```
+
+Output format matches the Cloudflare tunnel API (`PUT /tunnels/<id>/configurations`):
+
+```json
+{
+  "ingress": [
+    { "hostname": "web.example.test", "service": "http://localhost:19000" },
+    { "service": "http_status:404" }
+  ]
+}
+```
+
+## Agent Workflow
+
+Typical sequence for managing services:
+
+```bash
+# Edit the spec to add/change a service
+# (use `devport freeport` to pick ports)
+
+# Apply changes
+devport up
+
+# Check for problems
+devport status --json --diff
+
+# If a service is unhealthy, read its logs
+devport logs --key <service>
+
+# After fixing, restart that service
+devport restart --key <service>
+```
+
+## Status Model
+
+Services have four states:
+
+- `stopped` — not running
+- `starting` — process launched, waiting for health check
+- `running` — process alive and healthy
+- `failed` — process exited unexpectedly or health check timed out
+
+### Drift
+
+Drift is reported separately from status — a service can be `running` but drifted. Drift reasons include:
+
+- `spec changed since last start` — config hash mismatch, needs restart
+- `wrong port listening` — service runs on a different port than configured
+- `port not listening` — service claims running but socket is down
+- `health check failing` — process alive but health probe fails
+- `supervisor lock not held` — supervisor crashed, stale state
+
+## State and Logs
+
+- SQLite database: `~/.local/share/devport/devport.db` (WAL mode)
+- Structured log: `~/.local/log/devport.jsonl`
+- Lock files: `~/.local/share/devport/locks/`
+- Override state dir with `DEVPORT_STATE_DIR`
+
+### SQLite Database
+
+The database is safe to query read-only for diagnostics, automation, or ad-hoc inspection. Use `devport status --json` when possible, but direct SQL is useful for historical data and cross-service queries.
+
+```sql
+-- services: current state of each managed service
+CREATE TABLE services (
+    key TEXT PRIMARY KEY,          -- service key from the TOML spec
+    status TEXT NOT NULL,          -- stopped | starting | running | failed
+    spec_hash TEXT NOT NULL,       -- hash of the service's config block
+    pid INTEGER NOT NULL,          -- child process PID (0 if not running)
+    supervisor_pid INTEGER NOT NULL, -- supervisor process PID
+    port INTEGER NOT NULL,         -- bound port (0 if no_port)
+    no_port INTEGER NOT NULL,      -- 1 if service doesn't use a port
+    tmux_window TEXT NOT NULL,     -- tmux window name (deterministic hash)
+    restart_count INTEGER NOT NULL,
+    last_exit_code INTEGER NOT NULL,
+    last_exit_reason TEXT NOT NULL,
+    last_error TEXT NOT NULL,
+    started_at TEXT NOT NULL,      -- RFC 3339 timestamp
+    stopped_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- health_checks: latest health probe result per service
+CREATE TABLE health_checks (
+    key TEXT PRIMARY KEY,
+    check_type TEXT NOT NULL,      -- none | process | http | command
+    healthy INTEGER NOT NULL,      -- 1 = healthy, 0 = unhealthy
+    detail TEXT NOT NULL,
+    checked_at TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL
+);
+
+-- events: append-only log of state transitions
+CREATE TABLE events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    service_key TEXT NOT NULL,
+    level TEXT NOT NULL,           -- info | warn | error
+    event TEXT NOT NULL,           -- e.g. service_started, health_check_failed
+    data_json TEXT NOT NULL,       -- structured event payload
+    created_at TEXT NOT NULL
+);
+```
+
+The database is at `~/.local/share/devport/devport.db`. Use `python3 -c` for ad-hoc read-only queries:
+
+```bash
+# Helper: open the devport DB read-only
+#   import sqlite3, os
+#   db = sqlite3.connect(f"file:{os.path.expanduser('~/.local/share/devport/devport.db')}?mode=ro", uri=True)
+#   db.row_factory = sqlite3.Row
+
+# List all services and their status
+python3 -c "
+import sqlite3, os
+db = sqlite3.connect(f\"file:{os.path.expanduser('~/.local/share/devport/devport.db')}?mode=ro\", uri=True)
+db.row_factory = sqlite3.Row
+for r in db.execute('SELECT key, status, port, pid FROM services'): print(dict(r))
+"
+
+# Which services failed?
+python3 -c "
+import sqlite3, os
+db = sqlite3.connect(f\"file:{os.path.expanduser('~/.local/share/devport/devport.db')}?mode=ro\", uri=True)
+db.row_factory = sqlite3.Row
+for r in db.execute(\"SELECT key, last_error, stopped_at FROM services WHERE status='failed'\"): print(dict(r))
+"
+
+# Recent events for a service
+python3 -c "
+import sqlite3, os
+db = sqlite3.connect(f\"file:{os.path.expanduser('~/.local/share/devport/devport.db')}?mode=ro\", uri=True)
+db.row_factory = sqlite3.Row
+for r in db.execute('SELECT event, level, data_json, created_at FROM events WHERE service_key=? ORDER BY id DESC LIMIT 20', ('app/web',)): print(dict(r))
+"
+```
+
+### Structured Log
+
+Query the JSONL log directly:
+
+```bash
+# All events
+tail -f ~/.local/log/devport.jsonl | jq .
+
+# Errors only
+tail -f ~/.local/log/devport.jsonl | jq 'select(.level == "error")'
+
+# One service
+tail -f ~/.local/log/devport.jsonl | jq 'select(.service == "app/web")'
+```
 
 ## Surprising Behavior
 
-- `status` is not read-only in the purest sense. It may repair stale persisted state when runtime liveness disproves the DB row.
-- A service in `failed` does not guarantee the child process is already gone. Recovery paths still need to check and reap stale PIDs.
-- `health check failing` is drift, not automatically a state transition to `failed`.
-- `wrong port listening` means the service is still running on the last recorded port while the config now wants a different one.
-- `freeport` excludes both configured service ports and ports already listening on localhost.
-- inside Go tests, `os.Executable()` points at the test binary, so tmux-backed manager tests must override `manager.executable` to the built CLI binary.
+- `status` is not purely read-only — it repairs stale DB rows when runtime liveness disagrees
+- A `failed` service may still have a zombie child process; recovery paths reap stale PIDs before restarting
+- Health check failure is drift, not an automatic transition to `failed`
+- `freeport` checks both configured ports and actual listening ports on localhost
+- tmux window names are deterministic hashes (not human-readable service names)
 
-## Testing
+## Prerequisites
 
-Useful commands:
-
-```bash
-# Scenario: run the whole test suite, including tmux-backed blackbox tests.
-go test ./...
-
-# Scenario: rerun only the blackbox CLI coverage.
-go test ./... -run 'TestEndToEnd|TestEndToEndChaosMonkey'
-
-# Scenario: collect statement coverage across packages.
-go test ./... -coverprofile=cover.out
-go tool cover -func=cover.out
-```
-
-What the test suite already covers:
-
-- config parsing and validation
-- env interpolation and path resolution
-- SQLite store behavior
-- flock behavior
-- health probe behavior
-- manager lifecycle helpers
-- tmux-backed integration lifecycle tests
-- blackbox CLI E2E tests
-- chaos-style blackbox process disruption tests
-
-## When Editing This Repo
-
-- preserve the v2 config contract unless you are intentionally versioning the spec
-- update [docs/runtime-invariants.md](./docs/runtime-invariants.md) when lifecycle semantics change
-- prefer blackbox tests for lifecycle changes
-- if you touch recovery logic, extend `e2e_chaos_test.go` or `manager_integration_test.go`
-- keep `supervise` internal; user-facing behavior should route through the normal commands
-- be careful with stale-state fixes: database rows, locks, tmux windows, and live PIDs can disagree in partial failure cases
-
-## Suggested Starting Points
-
-- For CLI changes: start in `cli/devport/root.go`
-- For spec or validation changes: start in `config.go`
-- For lifecycle and recovery changes: start in `manager.go` and `supervisor.go`
-- For state schema changes: start in `store.go`
-- For failure analysis: read `docs/runtime-invariants.md`, then `e2e_chaos_test.go`
+- Go 1.26+
+- `tmux` on PATH
+- Unix-like environment (macOS, Linux)
