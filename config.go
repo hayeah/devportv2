@@ -137,7 +137,7 @@ func (s *ServiceSpec) normalize() error {
 	if s.Restart != "never" {
 		return fmt.Errorf("unsupported restart policy %q", s.Restart)
 	}
-	if err := s.Health.normalize(s.NoPort); err != nil {
+	if err := s.Health.normalize(); err != nil {
 		return err
 	}
 	if s.Public.Hostname != "" {
@@ -152,7 +152,7 @@ func (s *ServiceSpec) normalize() error {
 	return nil
 }
 
-func (h *HealthSpec) normalize(noPort bool) error {
+func (h *HealthSpec) normalize() error {
 	if h.Type == "" {
 		return fmt.Errorf("health block is required")
 	}

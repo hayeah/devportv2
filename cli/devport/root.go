@@ -111,7 +111,7 @@ func (a *App) newStartCommand(options *rootOptions) *cobra.Command {
 				return err
 			}
 			defer manager.Close()
-			return manager.Start(context.Background(), key, "start")
+			return manager.Start(context.Background(), key)
 		},
 	}
 	command.Flags().StringArrayVar(&options.keys, "key", nil, "service key")

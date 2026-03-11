@@ -49,6 +49,14 @@ type IngressDocument struct {
 	Ingress []IngressRule `json:"ingress"`
 }
 
+type serviceStatus struct {
+	key      string
+	service  ServiceSpec
+	record   *ServiceRecord
+	view     StatusView
+	lockHeld bool
+}
+
 func NewManager(explicitConfig string, stdout, stderr io.Writer) (*Manager, error) {
 	return NewManagerWithRuntime(RuntimeConfig{ConfigPath: explicitConfig}, stdout, stderr)
 }
@@ -69,7 +77,7 @@ func (m *Manager) Close() error {
 	return m.store.Close()
 }
 
-func (m *Manager) Start(ctx context.Context, key, cause string) error {
+func (m *Manager) Start(ctx context.Context, key string) error {
 	unlock, err := m.lockOperation(key)
 	if err != nil {
 		return err
@@ -87,10 +95,10 @@ func (m *Manager) Start(ctx context.Context, key, cause string) error {
 		}
 	}
 
-	return m.startLocked(ctx, key, cause)
+	return m.startLocked(ctx, key)
 }
 
-func (m *Manager) startLocked(ctx context.Context, key, cause string) error {
+func (m *Manager) startLocked(ctx context.Context, key string) error {
 	service, err := m.config.Service(key)
 	if err != nil {
 		return err
@@ -277,7 +285,7 @@ func (m *Manager) Restart(ctx context.Context, key string) error {
 			return err
 		}
 	}
-	return m.startLocked(ctx, key, "restart")
+	return m.startLocked(ctx, key)
 }
 
 func (m *Manager) Up(ctx context.Context, keys []string) error {
@@ -299,7 +307,7 @@ func (m *Manager) Up(ctx context.Context, keys []string) error {
 		if record != nil && lockHeld && (record.Status == "running" || record.Status == "starting") {
 			continue
 		}
-		if err := m.Start(ctx, key, "up"); err != nil {
+		if err := m.Start(ctx, key); err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", key, err))
 		}
 	}
@@ -381,127 +389,179 @@ func (m *Manager) Status(ctx context.Context, keys []string) ([]StatusView, erro
 
 	statuses := make([]StatusView, 0, len(selected))
 	for _, key := range selected {
-		service := m.config.Services[key]
-		record, err := m.store.Service(ctx, key)
+		status, err := m.statusForKey(ctx, key)
 		if err != nil {
 			return nil, err
 		}
-
-		view := StatusView{
-			Key:        key,
-			Status:     "stopped",
-			Port:       service.Port,
-			NoPort:     service.NoPort,
-			PublicHost: service.Public.Hostname,
-			Drift:      []string{},
-		}
-
-		if record != nil {
-			view.Status = record.Status
-			view.PID = record.PID
-			view.SupervisorPID = record.SupervisorPID
-			view.Port = record.Port
-			view.NoPort = record.NoPort
-			view.RestartCount = record.RestartCount
-			view.LastError = record.LastError
-			view.LastExitCode = record.LastExitCode
-			view.LastReason = record.LastExitReason
-		}
-
-		specHash, err := service.SpecHash()
-		if err != nil {
-			return nil, err
-		}
-		if record != nil && record.SpecHash != "" && record.SpecHash != specHash {
-			view.Drift = append(view.Drift, "spec changed since last start")
-		}
-
-		lockHeld, err := LockHeld(m.lockPath(key))
-		if err != nil {
-			return nil, err
-		}
-		if (view.Status == "running" || view.Status == "starting") && !lockHeld {
-			view.Status = "failed"
-			view.Drift = append(view.Drift, "supervisor lock not held")
-			if record != nil {
-				record.Status = "failed"
-				record.SupervisorPID = 0
-				if record.LastError == "" {
-					record.LastError = "supervisor lock not held"
-				}
-				record.LastExitReason = "supervisor_missing"
-				record.StoppedAt = nowUTC()
-				if err := m.store.UpsertService(ctx, *record); err != nil {
-					return nil, err
-				}
-				view.SupervisorPID = record.SupervisorPID
-				view.LastError = record.LastError
-				view.LastReason = record.LastExitReason
-			}
-		}
-		if view.Port > 0 && (view.Status == "running" || view.Status == "starting") && !portListening(view.Port) {
-			view.Drift = append(view.Drift, "port not listening")
-		}
-		if record != nil && record.Port > 0 && record.Port != service.Port {
-			view.Drift = append(view.Drift, "wrong port listening")
-		}
-
-		healthValue := "unknown"
-		if view.Status == "stopped" {
-			healthValue = "stopped"
-		} else if view.Status == "failed" && !lockHeld {
-			healthValue = "unhealthy"
-			view.LastChecked = nowUTC()
-			if err := m.store.SaveHealth(ctx, HealthRecord{
-				Key:        key,
-				CheckType:  service.Health.Type,
-				Healthy:    false,
-				Detail:     "supervisor lock not held",
-				DurationMS: 0,
-			}); err != nil {
-				return nil, err
-			}
-		} else {
-			env, err := LoadEnvironmentWithRuntime(service, m.runtime)
-			if err != nil {
-				return nil, err
-			}
-			cwd, err := m.runtime.ExpandPath(service.CWD)
-			if err != nil {
-				return nil, err
-			}
-			result := ProbeHealth(ctx, service, env, cwd, func() bool {
-				held, err := LockHeld(m.lockPath(key))
-				if err != nil {
-					return false
-				}
-				return held && processAlive(view.PID)
-			})
-			healthValue = "unhealthy"
-			if result.Healthy {
-				healthValue = "healthy"
-			} else {
-				view.Drift = append(view.Drift, "health check failing")
-			}
-			view.LastChecked = nowUTC()
-			view.CheckDuration = result.Duration.Milliseconds()
-			if err := m.store.SaveHealth(ctx, HealthRecord{
-				Key:        key,
-				CheckType:  service.Health.Type,
-				Healthy:    result.Healthy,
-				Detail:     result.Detail,
-				DurationMS: result.Duration.Milliseconds(),
-			}); err != nil {
-				return nil, err
-			}
-		}
-		view.Health = healthValue
-
-		sort.Strings(view.Drift)
-		statuses = append(statuses, view)
+		statuses = append(statuses, status)
 	}
 
 	return statuses, nil
+}
+
+func (m *Manager) statusForKey(ctx context.Context, key string) (StatusView, error) {
+	service := m.config.Services[key]
+	record, err := m.store.Service(ctx, key)
+	if err != nil {
+		return StatusView{}, err
+	}
+
+	status := serviceStatus{
+		key:     key,
+		service: service,
+		record:  record,
+		view:    m.baseStatusView(key, service, record),
+	}
+	if err := m.applySpecDrift(&status); err != nil {
+		return StatusView{}, err
+	}
+	if err := m.reconcileSupervisor(ctx, &status); err != nil {
+		return StatusView{}, err
+	}
+	m.applyPortDrift(&status)
+	if err := m.updateHealthStatus(ctx, &status); err != nil {
+		return StatusView{}, err
+	}
+
+	sort.Strings(status.view.Drift)
+	return status.view, nil
+}
+
+func (m *Manager) baseStatusView(key string, service ServiceSpec, record *ServiceRecord) StatusView {
+	view := StatusView{
+		Key:        key,
+		Status:     "stopped",
+		Port:       service.Port,
+		NoPort:     service.NoPort,
+		PublicHost: service.Public.Hostname,
+		Drift:      []string{},
+	}
+	if record == nil {
+		return view
+	}
+
+	view.Status = record.Status
+	view.PID = record.PID
+	view.SupervisorPID = record.SupervisorPID
+	view.Port = record.Port
+	view.NoPort = record.NoPort
+	view.RestartCount = record.RestartCount
+	view.LastError = record.LastError
+	view.LastExitCode = record.LastExitCode
+	view.LastReason = record.LastExitReason
+	return view
+}
+
+func (m *Manager) applySpecDrift(status *serviceStatus) error {
+	specHash, err := status.service.SpecHash()
+	if err != nil {
+		return err
+	}
+	if status.record != nil && status.record.SpecHash != "" && status.record.SpecHash != specHash {
+		status.view.Drift = append(status.view.Drift, "spec changed since last start")
+	}
+	return nil
+}
+
+func (m *Manager) reconcileSupervisor(ctx context.Context, status *serviceStatus) error {
+	lockHeld, err := LockHeld(m.lockPath(status.key))
+	if err != nil {
+		return err
+	}
+	status.lockHeld = lockHeld
+	if !runningStatus(status.view.Status) || lockHeld {
+		return nil
+	}
+
+	status.view.Status = "failed"
+	status.view.Drift = append(status.view.Drift, "supervisor lock not held")
+	if status.record == nil {
+		return nil
+	}
+
+	status.record.Status = "failed"
+	status.record.SupervisorPID = 0
+	if status.record.LastError == "" {
+		status.record.LastError = "supervisor lock not held"
+	}
+	status.record.LastExitReason = "supervisor_missing"
+	status.record.StoppedAt = nowUTC()
+	if err := m.store.UpsertService(ctx, *status.record); err != nil {
+		return err
+	}
+	status.view.SupervisorPID = status.record.SupervisorPID
+	status.view.LastError = status.record.LastError
+	status.view.LastReason = status.record.LastExitReason
+	return nil
+}
+
+func (m *Manager) applyPortDrift(status *serviceStatus) {
+	if status.view.Port > 0 && runningStatus(status.view.Status) && !portListening(status.view.Port) {
+		status.view.Drift = append(status.view.Drift, "port not listening")
+	}
+	if status.record != nil && status.record.Port > 0 && status.record.Port != status.service.Port {
+		status.view.Drift = append(status.view.Drift, "wrong port listening")
+	}
+}
+
+func (m *Manager) updateHealthStatus(ctx context.Context, status *serviceStatus) error {
+	switch {
+	case status.view.Status == "stopped":
+		status.view.Health = "stopped"
+		return nil
+	case status.view.Status == "failed" && !status.lockHeld:
+		status.view.Health = "unhealthy"
+		status.view.LastChecked = nowUTC()
+		return m.store.SaveHealth(ctx, HealthRecord{
+			Key:        status.key,
+			CheckType:  status.service.Health.Type,
+			Healthy:    false,
+			Detail:     "supervisor lock not held",
+			DurationMS: 0,
+		})
+	default:
+		result, err := m.probeServiceHealth(ctx, status)
+		if err != nil {
+			return err
+		}
+		status.view.Health = "unhealthy"
+		if result.Healthy {
+			status.view.Health = "healthy"
+		} else {
+			status.view.Drift = append(status.view.Drift, "health check failing")
+		}
+		status.view.LastChecked = nowUTC()
+		status.view.CheckDuration = result.Duration.Milliseconds()
+		return m.store.SaveHealth(ctx, HealthRecord{
+			Key:        status.key,
+			CheckType:  status.service.Health.Type,
+			Healthy:    result.Healthy,
+			Detail:     result.Detail,
+			DurationMS: result.Duration.Milliseconds(),
+		})
+	}
+}
+
+func (m *Manager) probeServiceHealth(ctx context.Context, status *serviceStatus) (HealthResult, error) {
+	env, err := LoadEnvironmentWithRuntime(status.service, m.runtime)
+	if err != nil {
+		return HealthResult{}, err
+	}
+	cwd, err := m.runtime.ExpandPath(status.service.CWD)
+	if err != nil {
+		return HealthResult{}, err
+	}
+	return ProbeHealth(ctx, status.service, env, cwd, func() bool {
+		held, err := LockHeld(m.lockPath(status.key))
+		if err != nil {
+			return false
+		}
+		return held && processAlive(status.view.PID)
+	}), nil
+}
+
+func runningStatus(status string) bool {
+	return status == "running" || status == "starting"
 }
 
 func (m *Manager) PrintStatus(statuses []StatusView, diffOnly bool) error {

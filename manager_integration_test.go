@@ -147,7 +147,7 @@ startup_timeout = "5s"
 		t.Fatalf("expected stopped service record, got %+v", record)
 	}
 
-	if err := manager.Start(ctx, "app/web", "test-start"); err != nil {
+	if err := manager.Start(ctx, "app/web"); err != nil {
 		t.Fatalf("Start after stop: %v", err)
 	}
 	record = findServiceRecord(t, manager, "app/web")
@@ -208,7 +208,7 @@ startup_timeout = "5s"
 	for range 2 {
 		go func() {
 			defer startWG.Done()
-			results <- manager.Start(ctx, "app/web", "concurrent-start")
+			results <- manager.Start(ctx, "app/web")
 		}()
 	}
 	startWG.Wait()
