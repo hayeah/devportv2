@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 
 	devport "github.com/hayeah/devportv2"
@@ -57,6 +59,7 @@ func (a *App) RootCommand() *cobra.Command {
 	root.AddCommand(a.newRestartCommand(options))
 	root.AddCommand(a.newStatusCommand(options))
 	root.AddCommand(a.newLogsCommand(options))
+	root.AddCommand(a.newAttachCommand(options))
 	root.AddCommand(a.newFreePortCommand(options))
 	root.AddCommand(a.newIngressCommand(options))
 	root.AddCommand(a.newSuperviseCommand(options))
@@ -218,6 +221,28 @@ func (a *App) newLogsCommand(options *rootOptions) *cobra.Command {
 	return command
 }
 
+func (a *App) newAttachCommand(options *rootOptions) *cobra.Command {
+	command := &cobra.Command{
+		Use:   "attach",
+		Short: "Attach to a service tmux window",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			manager, err := a.manager(options)
+			if err != nil {
+				return err
+			}
+			defer manager.Close()
+
+			key, err := attachKey(manager, options.keys, chooseKeyWithFzf)
+			if err != nil {
+				return err
+			}
+			return manager.Attach(context.Background(), key)
+		},
+	}
+	command.Flags().StringArrayVar(&options.keys, "key", nil, "service key or substring to match")
+	return command
+}
+
 func (a *App) newFreePortCommand(options *rootOptions) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "freeport",
@@ -288,6 +313,82 @@ func singleKey(keys []string) (string, error) {
 		return "", fmt.Errorf("exactly one --key is required")
 	}
 	return keys[0], nil
+}
+
+type attachKeyProvider interface {
+	ServiceKeys(keys []string) ([]string, error)
+}
+
+type attachKeyChooser func(keys []string, query string) (string, error)
+
+func attachKey(provider attachKeyProvider, keys []string, chooser attachKeyChooser) (string, error) {
+	if len(keys) > 1 {
+		return "", fmt.Errorf("attach accepts at most one --key")
+	}
+	available, err := provider.ServiceKeys(nil)
+	if err != nil {
+		return "", err
+	}
+	if len(available) == 0 {
+		return "", fmt.Errorf("no services defined in config")
+	}
+
+	query := ""
+	if len(keys) == 1 {
+		query = strings.TrimSpace(keys[0])
+	}
+	if query == "" {
+		return chooser(available, "")
+	}
+	for _, key := range available {
+		if key == query {
+			return key, nil
+		}
+	}
+
+	matches := []string{}
+	for _, key := range available {
+		if strings.Contains(key, query) {
+			matches = append(matches, key)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("no service key matches %q", query)
+	case 1:
+		return matches[0], nil
+	default:
+		return chooser(matches, query)
+	}
+}
+
+func chooseKeyWithFzf(keys []string, query string) (string, error) {
+	if _, err := exec.LookPath("fzf"); err != nil {
+		if query == "" {
+			return "", fmt.Errorf("fzf is required for interactive attach")
+		}
+		return "", fmt.Errorf("multiple service keys match %q; install fzf or pass an exact --key", query)
+	}
+
+	args := []string{"--prompt", "service> ", "--select-1", "--exit-0"}
+	if query != "" {
+		args = append(args, "--query", query)
+	}
+	command := exec.Command("fzf", args...)
+	command.Stdin = strings.NewReader(strings.Join(keys, "\n") + "\n")
+	command.Stderr = os.Stderr
+	output, err := command.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return "", fmt.Errorf("attach cancelled")
+		}
+		return "", fmt.Errorf("run fzf: %w", err)
+	}
+	selected := strings.TrimSpace(string(output))
+	if selected == "" {
+		return "", fmt.Errorf("attach cancelled")
+	}
+	return selected, nil
 }
 
 func (a *App) manager(options *rootOptions) (*devport.Manager, error) {

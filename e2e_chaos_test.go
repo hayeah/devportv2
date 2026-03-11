@@ -2,9 +2,7 @@ package devport_test
 
 import (
 	"context"
-	"crypto/sha1"
 	"database/sql"
-	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"net"
@@ -318,6 +316,5 @@ func portListeningTest(port int) bool {
 }
 
 func windowNameForKey(key string) string {
-	sum := sha1.Sum([]byte(key))
-	return "svc-" + hex.EncodeToString(sum[:])[:10]
+	return devport.NewTmux("test").WindowName(key)
 }

@@ -338,6 +338,28 @@ func (m *Manager) Logs(ctx context.Context, key string, lines int) (string, erro
 	return m.tmux.CapturePane(window, lines)
 }
 
+func (m *Manager) ServiceKeys(keys []string) ([]string, error) {
+	return m.runtime.Spec.ServiceKeys(keys)
+}
+
+func (m *Manager) Attach(ctx context.Context, key string) error {
+	if _, err := m.runtime.Spec.Service(key); err != nil {
+		return err
+	}
+	window := m.tmux.WindowName(key)
+	record, err := m.store.Service(ctx, key)
+	if err != nil {
+		return err
+	}
+	if record != nil && record.TmuxWindow != "" {
+		window = record.TmuxWindow
+	}
+	if !m.tmux.WindowExists(window) {
+		return fmt.Errorf("service %q has no tmux window", key)
+	}
+	return m.tmux.AttachWindow(window)
+}
+
 func (m *Manager) FreePort(keys []string) (int, error) {
 	if m.runtime.Spec.PortRange.Start == 0 || m.runtime.Spec.PortRange.End == 0 {
 		return 0, fmt.Errorf("config must define port_range")

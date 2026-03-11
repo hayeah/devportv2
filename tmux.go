@@ -1,9 +1,10 @@
 package devport
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
+	"crypto/sha256"
+	"encoding/base32"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -17,8 +18,9 @@ func NewTmux(session string) *Tmux {
 }
 
 func (t *Tmux) WindowName(key string) string {
-	sum := sha1.Sum([]byte(key))
-	return "svc-" + hex.EncodeToString(sum[:])[:10]
+	sum := sha256.Sum256([]byte(key))
+	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:])
+	return "svc-" + strings.ToLower(encoded[:16])
 }
 
 func (t *Tmux) Target(window string) string {
@@ -78,6 +80,33 @@ func (t *Tmux) CapturePane(window string, lines int) (string, error) {
 		return "", fmt.Errorf("tmux capture-pane: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return string(output), nil
+}
+
+func (t *Tmux) AttachWindow(window string) error {
+	if !t.SessionExists() {
+		return fmt.Errorf("tmux session %q not found", t.session)
+	}
+	if !t.WindowExists(window) {
+		return fmt.Errorf("tmux window %q not found", window)
+	}
+	if err := exec.Command("tmux", "select-window", "-t", t.Target(window)).Run(); err != nil {
+		return fmt.Errorf("tmux select-window: %w", err)
+	}
+	if os.Getenv("TMUX") != "" {
+		if err := exec.Command("tmux", "switch-client", "-t", t.session).Run(); err != nil {
+			return fmt.Errorf("tmux switch-client: %w", err)
+		}
+		return nil
+	}
+
+	command := exec.Command("tmux", "attach-session", "-t", t.session)
+	command.Stdin = os.Stdin
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("tmux attach-session: %w", err)
+	}
+	return nil
 }
 
 func (t *Tmux) setRemainOnExit(window string) error {
