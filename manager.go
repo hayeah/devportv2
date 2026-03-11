@@ -437,6 +437,9 @@ func (m *Manager) Status(ctx context.Context, keys []string) ([]StatusView, erro
 				if err := m.store.UpsertService(ctx, *record); err != nil {
 					return nil, err
 				}
+				view.SupervisorPID = record.SupervisorPID
+				view.LastError = record.LastError
+				view.LastReason = record.LastExitReason
 			}
 		}
 		if view.Port > 0 && (view.Status == "running" || view.Status == "starting") && !portListening(view.Port) {
