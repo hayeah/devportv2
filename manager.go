@@ -102,6 +102,17 @@ func (m *Manager) Start(ctx context.Context, key, cause string) error {
 	}
 	defer unlock()
 
+	record, err := m.store.Service(ctx, key)
+	if err != nil {
+		return err
+	}
+	if record != nil {
+		record.RestartCount = 0
+		if err := m.store.UpsertService(ctx, *record); err != nil {
+			return err
+		}
+	}
+
 	return m.startLocked(ctx, key, cause)
 }
 
